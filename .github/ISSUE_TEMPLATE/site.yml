@@ -1,0 +1,31 @@
+name: Site request / 사이트 요청
+description: A site that looks wrong or doesn't work with DuoWide. / DuoWide에서 이상하게 보이거나 안 되는 사이트
+labels: ["site"]
+body:
+  - type: input
+    id: url
+    attributes:
+      label: Page address / 페이지 주소
+      placeholder: https://example.com/page
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What looks wrong / 무엇이 이상한지
+      description: >-
+        What you expected and what happens. A screenshot or a screen recording helps a lot. /
+        어떻게 보여야 하는데 어떻게 되는지 적어 주세요. 스크린샷이나 화면 녹화가 있으면 큰 도움이 됩니다.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: DuoWide version / DuoWide 버전
+      description: "@version at the top of DuoWide.user.js / DuoWide.user.js 맨 위의 @version"
+      placeholder: "1.6.0"
+  - type: input
+    id: ios
+    attributes:
+      label: iOS version / iOS 버전
+      placeholder: "27.1"
