@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DuoWide
 // @namespace    https://github.com/hyungchulc/duowide
-// @version      1.6.0
+// @version      1.6.1
 // @description  Lets web pages use the whole iPhone Duo outer screen in Safari, under the side strip, and keeps what you tap clear of the strip.
 // @author       hyungchulc
 // @homepageURL  https://github.com/hyungchulc/duowide
@@ -40,6 +40,7 @@
   const TAP = 28;           // how much of a control has to stay clear of the strip to be tapped: Apple's smallest button
   const MARK = "data-duowide";
   const BAR = MARK + "-bar";  // on <html> while the page's scroll bars are ours
+  const RATIO = MARK + "-ratio";  // on <html> while widened: the whole screen over the part shown (see scriptWidth)
   const dbg = window.__duoWideDebug;  // tests: { strip: { side, gap, full } } stands in for the measured strip
 
   const store = {
@@ -57,14 +58,45 @@
 
   let stripPhone = false;  // this phone has shown the strip upright, so a landscape gap is the strip too (not a notch)
 
-  // Safari reports the page's visible width as innerWidth and the folded screen as screen.width/height, before and
-  // after the page is widened. The strip sits on the camera side: right when upright or turned with the camera
-  // down, left when turned the other way. Zoomed in, or on the way back out, Safari reports the size of the part
-  // zoomed into, which says nothing about the strip.
-  const zoomed = () => !!window.visualViewport && Math.abs(visualViewport.scale - 1) > 0.01;
+  // Safari's page zoom (aA in the address bar, or Settings > Apps > Safari > Page Zoom: 50% to 300%) lays a page out in
+  // that many fewer or more CSS pixels and shows it scaled by as much, so the page's lengths are no longer points: at
+  // 115% it counts 332 where the strip leaves 382 points clear, and a page laid out 466 wide would run 70 points past
+  // the screen. visualViewport.scale counts the zoom, the scale the viewport tag asks for and a pinch together, and
+  // 100vw counts the clear part over the first two only: a pinch is how much wider 100vw is than the part shown
+  // (visualViewport.width), and what is left of the scale after the pinch and the tag's is the zoom. (A zoom made with
+  // CSS zoom instead, as an app's WKWebView pageZoom does, leaves the scale alone and multiplies the pixel ratio: 3.45
+  // at 115% on the phone's 3x screen.) `shown` is the width of the part shown, in points.
+  function scales() {
+    const v = window.visualViewport, w = viewWidth(), r = devicePixelRatio;
+    const css = Math.abs(r - Math.round(r)) > 0.01 ? r / 3 : 1;
+    if (!v) return { zoom: css, view: 1, pinch: 1, shown: innerWidth * css };
+    const shown = v.width * v.scale * css;
+    if (!w) return { zoom: css, view: 1, pinch: v.scale, shown };  // (100vw not read: as if Safari did not zoom)
+    const pinch = w / v.width, view = v.scale / pinch / tagScale();
+    return { zoom: view * css, view, pinch, shown };
+  }
+  // 100vw in CSS pixels, read off a length property of ours that our sheet sets to it on <html> (see wholeScreen).
+  const VIEW = "--duowide-view";
+  try { CSS.registerProperty({ name: VIEW, syntax: "<length>", inherits: false, initialValue: "0px" }); } catch (e) { /* (there already) */ }
+  function viewWidth() {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(VIEW).trim();
+    return v.endsWith("px") ? parseFloat(v) : 0;
+  }
+  // The scale the viewport tag Safari goes by asks for: the page's own, or ours (1).
+  function tagScale() {
+    const t = own || meta || viewportTag();
+    const k = parseFloat(parse(t && t.getAttribute("content")).get("initial-scale"));
+    return k > 0 ? k : 1;
+  }
+
+  // Safari reports the part of the page it shows as the visual viewport and the folded screen as screen.width/height,
+  // before and after the page is widened. The strip sits on the camera side: right when upright or turned with the
+  // camera down, left when turned the other way. Pinched, or on the way back out, the page is left as it is (see
+  // passing). What this returns is in the page's CSS pixels, but `width`, the width for the viewport tag.
+  const zoomed = () => !!window.visualViewport && Math.abs(scales().pinch - 1) > 0.01;
   function detect() {
     if (zoomed()) return null;
-    if (dbg && dbg.strip) return dbg.strip;
+    if (dbg && dbg.strip) return { zoom: 1, width: dbg.strip.full, ...dbg.strip };
     const type = (screen.orientation && screen.orientation.type) || "";
     const o = innerWidth > innerHeight ? "landscape" : "portrait";
     if (!type.startsWith(o)) return null;  // a window beside another app on an unfolded screen
@@ -74,12 +106,15 @@
     // Safari's own layout, which starts after it, is left as it is unless asked for.
     if (!side || (side === "left" && !CONFIG.left)) return null;
     const full = o === "landscape" ? Math.max(screen.width, screen.height) : Math.min(screen.width, screen.height);
-    const gap = full - innerWidth;
+    const { zoom, view, shown } = scales();
+    const gap = full - shown;
     if (gap < STRIP[0] || gap > STRIP[1]) return null;
     if (o === "portrait" && !stripPhone) { stripPhone = true; store.set("stripPhone", true); }
     if (o === "landscape" && !stripPhone) return null;
-    // The visible page's height, which Safari's bars change.
-    return { side, gap, full, height: innerHeight };
+    // The tag gives the screen over the scale Safari zooms the view by (a CSS zoom takes the tag's numbers as points),
+    // and the visible page's height, which Safari's bars change.
+    const width = Math.round(full / view);
+    return { side, gap: gap / zoom, full: (width * view) / zoom, width, zoom, height: innerHeight * tagScale() };
   }
 
   // ---------- the viewport tag ----------
@@ -106,7 +141,7 @@
   // up as the page scrolls down. So the height is the visible page's.
   function widened(content, s) {
     const m = parse(content);
-    m.set("width", String(s.full));
+    m.set("width", String(s.width));
     if (s.height) m.set("height", String(Math.round(s.height)));
     m.set("initial-scale", "1");
     m.set("minimum-scale", "1");
@@ -122,10 +157,17 @@
   let ours = "";      // the content we wrote
   const others = new Map();  // the page's other viewport tags -> their own content, while they carry ours too
   let own = null;     // a viewport tag of ours, read after the page's, while those keep the page's own content
-  let strip = null;   // { side, gap, full } while the page is widened
+  let strip = null;   // { side, gap, full, width, zoom, height } while the page is widened (see detect)
   let rewrites = [];  // when the page put its own content back while ours was in place
   let yielded = false;
   let shape = "";     // the screen's size when the page was widened
+  let scaled = false; // the reader has zoomed the page, so WebKit keeps its scale itself (see sleep)
+  let asleep = false; // the page's own viewport is back while it is hidden (see sleep)
+
+  // n points in the page's CSS pixels (see scales); TAP, EDGE and the scroll bar's TRACK are in points.
+  const pt = (n) => n / (strip ? strip.zoom : 1);
+  // Another side, screen or zoom than the page was widened for.
+  const refit = (s) => s.side !== strip.side || s.width !== strip.width || Math.abs(s.gap - strip.gap) > 0.5;
 
   const screenShape = () => Math.min(screen.width, screen.height) + "x" + Math.max(screen.width, screen.height);
   // A size the same screen can't show: the phone partway through turning (its orientation and the window's shape
@@ -139,13 +181,13 @@
     const type = (screen.orientation && screen.orientation.type) || "";
     const o = innerWidth > innerHeight ? "landscape" : "portrait";
     const side = o === "landscape" ? Math.max(screen.width, screen.height) : Math.min(screen.width, screen.height);
-    return !type.startsWith(o) || innerWidth > side + 1;
+    return !type.startsWith(o) || scales().shown > side + 1;
   }
 
   const sameTag = (a, b) => [...parse(a)].sort().join() === [...parse(b)].sort().join();
 
   function consider() {
-    if (yielded) return;
+    if (yielded || (asleep && document.visibilityState === "hidden")) return;
     const tag = viewportTag();
     if (own) {
       // (see ownTag) The page's tags keep what it writes in them, and ours carries the page's own content widened.
@@ -156,7 +198,7 @@
       if (content !== orig) { orig = content; ours = widened(orig, strip); }
       const s = passing() ? strip : detect();
       if (!s) { restore(); return; }
-      if (s.side !== strip.side || s.full !== strip.full) { apply(orig, s); return; }
+      if (refit(s)) { apply(orig, s); return; }
       if (s.height && Math.abs(s.height - strip.height) > 0.5) { strip.height = s.height; ours = widened(orig, strip); }
       lastOurs();
       return;
@@ -189,7 +231,7 @@
       if (passing()) return;
       const s = detect();
       if (!s) restore();
-      else if (s.side !== strip.side || s.full !== strip.full) apply(orig, s);
+      else if (refit(s)) apply(orig, s);
       else if (s.height && Math.abs(s.height - strip.height) > 0.5) {
         // Safari's bars grew or shrank: the page keeps its width and follows the height.
         const was = ours;
@@ -240,6 +282,7 @@
     guardEdge();
     ownBar(false);
     document.documentElement.removeAttribute(MARK);
+    scriptWidth(null);
     return false;
   }
 
@@ -286,6 +329,7 @@
       }
     }
     document.documentElement.setAttribute(MARK, s.side);
+    scriptWidth(s);
     wholeScreen();
     guardEdge();
     pin();
@@ -308,6 +352,21 @@
     guardEdge();
     ownBar(false);
     document.documentElement.removeAttribute(MARK);
+    scriptWidth(null);
+  }
+
+  // Once the reader has zoomed a page (a pinch, or a double tap, which Safari answers on a page whose viewport tag
+  // gives its width as a number, as a widened page's does), WebKit no longer puts it back at the scale its tag asks for
+  // when the window changes size: it keeps the same share of the page's width in view, and a page Safari loads again
+  // from where it was (after dropping it in the background, say) keeps that too. Widened, that share is only the part
+  // the strip leaves clear, 382 of 466 upright, and as Safari goes to the background iOS lays the page out at other
+  // sizes to picture it for the app switcher; kept across those, the share can bring the page back zoomed in, by up to
+  // the screen over that part. So a page the reader has zoomed gets its own viewport back while it is hidden, in view
+  // as wide as it is laid out, and is widened again as it shows (see shows).
+  function sleep() {
+    if (!strip || !scaled || zoomed()) return;
+    asleep = true;
+    restore();
   }
 
   // ---------- the screen's width in CSS units ----------
@@ -405,16 +464,16 @@
     }).catch(() => {});
   }
 
-  // Our sheet: the variable while the page is widened, and the rules laid over sheets that are still there. With them,
-  // the scroll bars made clear while we draw our own (see ownBar), and words kept at the size the page gives them: as
-  // Safari goes to the background, iOS lays the page out for a moment twice as wide to picture it for the app switcher,
-  // and Safari enlarges the words of a page that hasn't said otherwise (-webkit-text-size-adjust) in boxes wider than
-  // the screen, half again as big; enlarged like that, a page came back with its words bigger than it left. (Each yields
-  // to the page's own setting.)
+  // Our sheet: 100vw to read as a length (see scales), the variable while the page is widened, and the rules laid over
+  // sheets that are still there. With them, the scroll bars made clear while we draw our own (see ownBar), and words
+  // kept at the size the page gives them: as Safari goes to the background, iOS lays the page out for a moment twice as
+  // wide to picture it for the app switcher, and Safari enlarges the words of a page that hasn't said otherwise
+  // (-webkit-text-size-adjust) in boxes wider than the screen, half again as big; enlarged like that, a page came back
+  // with its words bigger than it left. (Each yields to the page's own setting.)
   function wholeScreen() {
     const live = new Set(document.styleSheets);
     const unit = dbg && dbg.vw ? dbg.vw : strip && strip.full / 100;  // (tests: a vw as Safari counts it, to see the difference)
-    const text = (strip ? `:root{--duowide-vw:${unit}px !important}:where(html[${MARK}]){-webkit-text-size-adjust:100%}` +
+    const text = `:root{${VIEW}:100vw}` + (strip ? `:root{--duowide-vw:${unit}px !important}:where(html[${MARK}]){-webkit-text-size-adjust:100%}` +
       `:where(html[${BAR}]){scrollbar-color:transparent transparent}:where(html[${BAR}]>body){scrollbar-color:auto}` : "") +
       laidOver.filter(([s]) => live.has(s)).map(([, over]) => over).join("");
     if (text !== screenText) {
@@ -436,6 +495,50 @@
     for (const sheet of document.styleSheets) countSheet(sheet);
     if (document.adoptedStyleSheets) for (const sheet of document.adoptedStyleSheets) if (sheet !== screenSheet) countSheet(sheet);
     for (const el of document.querySelectorAll("[style*='vw' i]")) if (!el.hasAttribute(MARK)) wholeWidth(el.style);
+  }
+
+  // ---------- the screen's width in scripts ----------
+
+  // Safari counts innerWidth too in the part of the screen its strip leaves clear, so a page's script that lays things
+  // out by it goes by that part while the page's sheets, widened, go by the whole screen: at 75% zoom the sheets of
+  // m.naver.com's feed set out two columns in the 621 pixels it is laid out in, and its script, reading 509, filled
+  // only the first. While the page is widened, its scripts read innerWidth across the whole screen too. They run apart
+  // from ours (Userscripts runs ours in a world of its own), so a few lines go into the page itself, as Userscripts
+  // puts in a script that asks to run there, where the page lets inline scripts run: they scale the page's innerWidth
+  // by the whole screen over the part shown, kept on <html>. A change of that is told to the page as a resize, as
+  // Safari tells its own.
+  const PAGE_WIDTH = `(() => {
+    let o = window, d;
+    while (o && !(d = Object.getOwnPropertyDescriptor(o, "innerWidth"))) o = Object.getPrototypeOf(o);
+    if (!d || !d.get) return;
+    Object.defineProperty(window, "innerWidth", { configurable: true, enumerable: d.enumerable, set: d.set, get() {
+      const w = d.get.call(this), r = parseFloat(document.documentElement?.getAttribute("${RATIO}"));
+      return r > 1 ? Math.round(w * r) : w;
+    } });
+  })();`;
+  let inPage = false, telling = false, tellTimer = 0;
+  function scriptWidth(s) {
+    const root = document.documentElement;
+    const r = s ? (s.full * s.zoom) / scales().shown : 1;
+    const v = Number.isFinite(r) && r > 1.001 ? r.toFixed(5) : null;  // (none where all of it shows, as in Chromium)
+    if (v === root.getAttribute(RATIO)) return;
+    if (v && !inPage) {
+      inPage = true;
+      try {
+        const el = document.createElement("script");
+        el.setAttribute(MARK, "width");
+        el.textContent = PAGE_WIDTH;
+        (document.head || root).appendChild(el);
+        el.remove();
+      } catch (e) { /* (a page that takes only scripts made trusted, see Trusted Types) */ }
+    }
+    if (v) root.setAttribute(RATIO, v);
+    else root.removeAttribute(RATIO);
+    clearTimeout(tellTimer);
+    tellTimer = setTimeout(() => {  // (once Safari has laid the page out again, see settle)
+      telling = true;
+      try { dispatchEvent(new Event("resize")); } finally { telling = false; }
+    }, 120);
   }
 
   const metaWatch = new MutationObserver(() => consider());
@@ -521,12 +624,12 @@
     if (barFrame || !document.documentElement.hasAttribute(BAR)) return;
     barFrame = requestAnimationFrame(() => {
       barFrame = 0;
-      const root = document.documentElement;
+      const root = document.documentElement, z = strip ? strip.zoom : 1;  // (worked out in points, as iOS draws it)
       const H = innerWidth > innerHeight ? Math.min(screen.width, screen.height) : Math.max(screen.width, screen.height);
-      const track = H - 2 * TRACK.ends, page = root.scrollHeight, max = page - innerHeight;
+      const track = H - 2 * TRACK.ends, page = root.scrollHeight * z, seen = innerHeight * z, max = root.scrollHeight - innerHeight;
       if (!root.hasAttribute(BAR) || max < 1 || track < TRACK.min) return;
-      const over = Math.max(0, -scrollY, scrollY - max);  // (pulled past either end, it shortens, as iOS's does)
-      const len = Math.max(Math.max(TRACK.min, (track * H) / (page + H - innerHeight)) - over, 2 * TRACK.width);
+      const over = Math.max(0, -scrollY, scrollY - max) * z;  // (pulled past either end, it shortens, as iOS's does)
+      const len = Math.max(Math.max(TRACK.min, (track * H) / (page + H - seen)) - over, 2 * TRACK.width);
       const top = TRACK.ends + (track - len) * Math.min(1, Math.max(0, scrollY / max));
       if (!barShown) barColor = pageIsDark() ? "rgba(255, 255, 255, 0.5)" : "rgba(0, 0, 0, 0.5)";
       if (!bar) {
@@ -534,9 +637,9 @@
         bar.setAttribute(MARK, "bar");
         bar.setAttribute("aria-hidden", "true");
       }
-      bar.style.cssText = cssOf({ position: "fixed", top: "0", right: `${TRACK.edge}px`, left: "auto", bottom: "auto",
-        width: `${TRACK.width}px`, height: `${len}px`, margin: "0", padding: "0", border: "0", "border-radius": `${TRACK.width / 2}px`,
-        background: barColor, transform: `translateY(${top}px)`, display: "block", visibility: "visible", opacity: "1",
+      bar.style.cssText = cssOf({ position: "fixed", top: "0", right: `${pt(TRACK.edge)}px`, left: "auto", bottom: "auto",
+        width: `${pt(TRACK.width)}px`, height: `${pt(len)}px`, margin: "0", padding: "0", border: "0", "border-radius": `${pt(TRACK.width / 2)}px`,
+        background: barColor, transform: `translateY(${pt(top)}px)`, display: "block", visibility: "visible", opacity: "1",
         transition: "none", "pointer-events": "none", "z-index": "2147483647" });
       if (bar.parentNode !== root) root.appendChild(bar);
       clearTimeout(barShown);
@@ -1611,7 +1714,7 @@
       const reads = (b, nodes) => {
         if (b.closest("table, pre, [role=table], [role=grid]")) return false;
         const t = textBox(nodes, b);
-        if (!t || t.left > hi - TAP || (t.lines === 1 && t.right - t.left < Math.min(160, (hi - lo) / 2))) return false;
+        if (!t || t.left > hi - pt(TAP) || (t.lines === 1 && t.right - t.left < Math.min(160, (hi - lo) / 2))) return false;
         let own = 0, all = 0;
         for (const n of nodes) {
           const len = n.data.trim().length, c = n.parentElement.closest(CONTROL);
@@ -1679,7 +1782,7 @@
       // It is pressed on the part that shows, if that is as wide as the smallest button (a big one half under the strip,
       // a grid's last column, is pressed beside it) or most of a small one; a wide one shows its end (a row's ›, a
       // team's logo) under the strip with the words.
-      return onScreen(r) && (el.matches(FIELD) || fieldFrames.has(el) ? hidden(r.left, r.right) : Math.min(r.right, hi) - Math.max(r.left, lo) < Math.min(TAP, r.width * 0.7) - 0.5);
+      return onScreen(r) && (el.matches(FIELD) || fieldFrames.has(el) ? hidden(r.left, r.right) : Math.min(r.right, hi) - Math.max(r.left, lo) < Math.min(pt(TAP), r.width * 0.7) - 0.5);
     };
     const visible = (el) => !(el.checkVisibility && !el.checkVisibility({ visibilityProperty: true }));
     const usable = (el) => !inFixed(el, boxes) && !carouselOf(el) && visible(el);
@@ -1933,7 +2036,7 @@
           for (const m of now) {
             if (m.kind !== "tap" || unit.contains(m.node) || m.node.contains(g)) continue;
             const p = m.node, pr = m.q, ps = getComputedStyle(p);
-            if (pr.width > 3 * Math.max(q.width, TAP) || pr.height > 2 * q.height + 8 || ps.translate !== "none" || !covers(q, pr)) continue;
+            if (pr.width > 3 * Math.max(q.width, pt(TAP)) || pr.height > 2 * q.height + 8 || ps.translate !== "none" || !covers(q, pr)) continue;
             if (Math.min(pr.bottom, q.bottom) - Math.max(pr.top, q.top) < 0.6 * Math.min(pr.height, q.height)) continue;  // not on its line
             if (pr.left + dx < Math.max(lo, sb.left) - 0.5 || pr.right + dx > Math.min(hi, sb.right) + 0.5) continue;
             const s = shiftOf(p, ps, dx);
@@ -1965,7 +2068,7 @@
               const box = b.getBoundingClientRect();
               const px = right ? box.right - (parseFloat(bs.borderRightWidth) || 0) - (parseFloat(bs.paddingRight) || 0) - edgeOf
                 : edgeOf - box.left - (parseFloat(bs.borderLeftWidth) || 0) - (parseFloat(bs.paddingLeft) || 0);
-              if (px < 1 || px > strip.gap + TAP) continue;
+              if (px < 1 || px > strip.gap + pt(TAP)) continue;
               const room = makeRoom(b, px, true, tries === 1 && textOnly(b));  // the words' own line may be cut
               if (!room) continue;
               if (hit()) { unsetProps(b, Object.keys(room.props)); continue; }
@@ -2027,7 +2130,7 @@
   // ---------- watching ----------
 
   let changes = null;        // watches the page for new parts and switched classes
-  let refixTimer = 0, fullTimer = 0, lastScroll = 0, lastFull = -Infinity, touching = false;
+  let refixTimer = 0, fullTimer = 0, lastScroll = 0, lastFull = -Infinity, touching = false, touchedAt = -Infinity;
   const refixSoon = (ms = 250) => { clearTimeout(refixTimer); refixTimer = setTimeout(() => refix(false), ms); };
   // Looking the page over lays it out a few times, which would hitch a scroll in motion: it waits until the page is
   // still and no finger is on it. A page that keeps changing (tickers, live scores) gets looked at once a second at
@@ -2102,12 +2205,13 @@
     });
     changes.observe(document.documentElement || document, { childList: true, subtree: true, attributes: true });
     addEventListener("resize", () => {
+      if (telling) return;  // (ours, see scriptWidth)
       if (orig === null) { consider(); return; }
       if (passing()) return;
       // Safari's bars growing or shrinking changes only the height: the tag follows it and the bars are fitted again,
       // and the text and rows that were given room keep it.
       const s = detect();
-      if (s && strip && s.side === strip.side && s.full === strip.full && s.gap === strip.gap) { consider(); refixSoon(300); return; }
+      if (s && strip && !refit(s)) { consider(); refixSoon(300); return; }
       // Turning or folding the phone moves or removes the strip: start again from the page's own layout.
       unfix(); consider(); if (strip) settle();
     });
@@ -2137,7 +2241,7 @@
     addEventListener("message", (e) => { if (e.data === "duowide:ask" && e.source) e.source.postMessage(framesHeld ? "duowide:hold" : "duowide:free", "*"); });
     // A style sheet that comes in may size things in vw (see wholeScreen).
     document.addEventListener("load", (e) => { if (strip && e.target instanceof Element && e.target.localName === "link") wholeScreen(); }, true);
-    addEventListener("touchstart", () => { touching = true; }, { passive: true, capture: true });
+    addEventListener("touchstart", () => { touching = true; touchedAt = performance.now(); }, { passive: true, capture: true });
     // touch-action (see pin) keeps Safari from sliding the page sideways, but a sideways swipe that drifts up or down a
     // little still scrolls the page by that much: a carousel the page slides itself crept the page up or down with
     // every swipe. A swipe on one that starts out sideways moves the page not at all; the carousel keeps getting the
@@ -2148,7 +2252,7 @@
     // and a swipe from either edge of the page.
     let swipe = null;
     const EDGE = 32;
-    const nearEdge = (x) => { const { lo, hi } = clearBand(); return x < lo + EDGE || x > hi - EDGE; };
+    const nearEdge = (x) => { const { lo, hi } = clearBand(); return x < lo + pt(EDGE) || x > hi - pt(EDGE); };
     const sideways = (path, dx) => path.some((n) => {
       if (!(n instanceof Element) || n === document.documentElement || n === document.body) return false;
       if (n.matches("input, textarea, select, [contenteditable], video, audio")) return true;
@@ -2167,7 +2271,7 @@
         // (Far enough that a second finger landing for a pinch has come down, and short of where Safari starts to
         // scroll.)
         const dx = e.touches[0].clientX - swipe.x, dy = e.touches[0].clientY - swipe.y;
-        if (Math.max(Math.abs(dx), Math.abs(dy)) < 6) return;
+        if (Math.max(Math.abs(dx), Math.abs(dy)) < pt(6)) return;
         swipe.way = Math.abs(dx) > Math.abs(dy) && e.timeStamp - swipe.at < 400 && !sideways(swipe.path, dx) ? "x" : "y";
       }
       if (swipe.way === "x" && e.cancelable) e.preventDefault();
@@ -2182,22 +2286,27 @@
     addEventListener("load", () => { consider(); if (strip) settle(); });
     // A page Safari loaded ahead while its address was typed, or kept from before, shows without loading again and may
     // have been laid out at another size: it is looked at again when it shows. Web fonts that arrive after the page was
-    // looked over change how wide its words are.
-    const shows = () => { if (document.visibilityState !== "visible") return; consider(); if (strip) settle(); };
+    // looked over change how wide its words are. A page that slept while hidden is widened again (see sleep).
+    const shows = () => { if (document.visibilityState !== "visible") return; asleep = false; consider(); if (strip) settle(); };
     // (A finger still down as Safari went to the background is never seen to lift: the page would stay where it slid.)
-    document.addEventListener("visibilitychange", () => { touching = false; barUntil = 0; });
+    document.addEventListener("visibilitychange", () => { touching = false; barUntil = 0; if (document.visibilityState === "hidden") sleep(); });
     document.addEventListener("visibilitychange", shows);
     addEventListener("pageshow", shows);
     document.addEventListener("prerenderingchange", shows);
     if (document.fonts) document.fonts.addEventListener("loadingdone", () => { if (strip) refixAllSoon(300); });
     // Zooming in lets the page pan sideways again, and zooming back out holds it. Back at its own scale, the page is
-    // looked at again, as what changed while it was zoomed into was left alone (see passing).
-    let zoomedIn = zoomed();  // (a page shows zoomed out until its viewport tag is read)
+    // looked at again, as what changed while it was zoomed into was left alone (see passing). The reader zooms with a
+    // finger on the page or just off it (a double tap); a page that shows zoomed from the start was brought back so
+    // (see sleep). Safari's page zoom moving to another step can look like a zoom for a moment, the scale changed
+    // before the part shown, and is no reader's.
+    let zoomedIn = zoomed();
+    if (zoomedIn) scaled = true;
     if (window.visualViewport) visualViewport.addEventListener("resize", () => {
       if (strip) pin();
       if (zoomed() === zoomedIn) return;
       zoomedIn = !zoomedIn;
       if (!zoomedIn) { consider(); if (strip) settle(); }
+      else if (touching || performance.now() - touchedAt < 1500) scaled = true;
     });
     // Safari slides the page when a field takes the keyboard; put it back once it has.
     addEventListener("focusin", () => { if (strip) setTimeout(pin, 400); });
@@ -2205,13 +2314,14 @@
 
   async function start() {
     stripPhone = (await store.get("stripPhone", false)) === true;
+    const begin = () => { wholeScreen(); watch(); consider(); };  // (our sheet first: it gives 100vw to read)
     if (!document.documentElement) {
-      new MutationObserver((_, obs) => { if (document.documentElement) { obs.disconnect(); watch(); consider(); } }).observe(document, { childList: true });
-    } else { watch(); consider(); }
+      new MutationObserver((_, obs) => { if (document.documentElement) { obs.disconnect(); begin(); } }).observe(document, { childList: true });
+    } else begin();
   }
 
   if (dbg) dbg.refix = () => refix(true);
-  if (dbg) dbg.state = () => ({ orig, ours, own: !!own, strip, stripPhone, yielded, rewrites: rewrites.length, others: others.size, edge: !!(edge && edge.isConnected), bar: document.documentElement.hasAttribute(BAR), fixed: fixed.size, movers: movers.length, insets: insets.size, content: meta?.getAttribute("content") || null });
+  if (dbg) dbg.state = () => ({ orig, ours, own: !!own, strip, stripPhone, yielded, scaled, asleep, rewrites: rewrites.length, others: others.size, edge: !!(edge && edge.isConnected), bar: document.documentElement.hasAttribute(BAR), fixed: fixed.size, movers: movers.length, insets: insets.size, content: meta?.getAttribute("content") || null });
   if (dbg) dbg.movers = () => movers.map((m) => ({ el: m.el.id || m.el.localName, cls: String(m.el.className).slice(0, 40), text: (m.el.textContent || "").trim().slice(0, 30), props: m.props }));
   if (dbg) dbg.insets = () => [...insets.keys()].map((e) => ({ el: e.id || e.localName, cls: String(e.className).slice(0, 40), text: (e.textContent || "").trim().replace(/\s+/g, " ").slice(0, 30) }));
   start();
