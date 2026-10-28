@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DuoWide
 // @namespace    https://github.com/hyungchulc/duowide
-// @version      1.6.1
+// @version      1.6.2
 // @description  Lets web pages use the whole iPhone Duo outer screen in Safari, under the side strip, and keeps what you tap clear of the strip.
 // @author       hyungchulc
 // @homepageURL  https://github.com/hyungchulc/duowide
@@ -1322,6 +1322,15 @@
     return (!!clamp && clamp !== "none") || (/hidden|clip/.test(cs.overflowY) && block.scrollHeight > block.clientHeight + 1);
   }
 
+  // Words held on one line (a list's title cut short with an ellipsis where its box ends): they can't wrap, or their
+  // box is clamped to the one line. Room taken out of the box doesn't bring them onto another line, only cuts more of
+  // them off.
+  function oneLine(block, nodes) {
+    const cs = getComputedStyle(block), clamp = cs.webkitLineClamp || cs.getPropertyValue("-webkit-line-clamp");
+    if (clamp === "1") return true;
+    return nodes.every((n) => { const s = getComputedStyle(n.parentElement); return /^(nowrap|pre)$/.test(s.whiteSpace) || s.textWrapMode === "nowrap"; });
+  }
+
   // A block of running text, rather than a box that also holds other blocks, which giving it room would squeeze too.
   function textOnly(block) {
     for (const c of block.children) {
@@ -1702,9 +1711,10 @@
   // where lines begin, and a title stepping in beside lines that stay put would leave a ragged edge: every line there
   // keeps clear of it for good. So do the words on the right that are read from line to line, which would end their
   // lines under Safari's buttons, all alike: a post's or an article's paragraphs, a comment, a notice of a line or
-  // two, a title in a list (held to a few lines, it shows fewer words). Left as they are: a table's cells, code, a bar
-  // of links or buttons (they move by themselves, below), a short label at the end of a row (a nickname, a time),
-  // which starts under the strip or is too short to be a line of words, and a box that would squeeze its pictures.
+  // two, a title in a list that wraps (held to a few lines, it shows fewer words). Left as they are: a table's cells,
+  // code, a bar of links or buttons (they move by themselves, below), a short label at the end of a row (a nickname, a
+  // time), which starts under the strip or is too short to be a line of words, words held on one line, which room
+  // would only cut shorter, and a box that would squeeze its pictures.
   // Returns the blocks of words it found, on one line and on several, and how it gives one room.
   function fitLines(band, usable) {
     const { lo, hi } = band, { right, onScreen, hidden, need } = reach(band);
@@ -1713,6 +1723,9 @@
     if (right) {
       const reads = (b, nodes) => {
         if (b.closest("table, pre, [role=table], [role=grid]")) return false;
+        // (Words held on one line run on under the strip, where the wider screen is there to show more of them: given
+        // room, Clien's list titles ended in "…" well short of their comment counts, which stay under the strip.)
+        if (oneLine(b, nodes)) return false;
         const t = textBox(nodes, b);
         if (!t || t.left > hi - pt(TAP) || (t.lines === 1 && t.right - t.left < Math.min(160, (hi - lo) / 2))) return false;
         let own = 0, all = 0;
@@ -1734,18 +1747,19 @@
       const depth = (e) => { let d = 0; for (let p = e.parentElement; p; p = p.parentElement) d++; return d; };
       lasting = new Map([...lasting].sort((a, b) => depth(a[0]) - depth(b[0])));
     }
-    const giveRoom = (block, nodes) => {
+    const giveRoom = (block, nodes, link) => {
       if (!usable(block)) return;
-      const b = block.getBoundingClientRect(), was = textBox(nodes, block);
+      const b = block.getBoundingClientRect(), was = textBox(nodes, block), held = heldText(block);
       const px = need(b);
       // Words held to a few lines end before the strip as a narrower box: a page places the "more" laid over their
       // end by the box's width, which room taken inside it would not change (LinkedIn's feed).
-      const room = px >= 1 && ((heldText(block) && makeRoom(block, px, false, false, true, true)) || makeRoom(block, px, false));
+      const room = px >= 1 && ((held && makeRoom(block, px, false, false, true, true)) || makeRoom(block, px, false));
       if (!room) return;
       // Held to its width, a label that sizes its box would break up rather than come in; words that can't wrap (held
-      // on one line) don't come in at all.
+      // on one line) don't come in at all. On the right, neither do words that would wrap onto a line their box cuts
+      // off (a title in a box one line high), unless the room is to bring a link in.
       const now = textBox(nodes, block);
-      if (("max-width" in room.props && single.has(block) && (now || { lines: 1 }).lines > 1) ||
+      if (("max-width" in room.props && single.has(block) && (now || { lines: 1 }).lines > 1) || (right && !link && !held && heldText(block)) ||
         (was && now && (right ? now.right > was.right - 0.5 : now.left < was.left + 0.5))) { unsetProps(block, Object.keys(room.props)); return; }
       insets.set(block, nodes);
       if ("box-shadow" in room.props) { shades.set(block, { gap: px, h: block.getBoundingClientRect().height }); shadeSizes.observe(block); }
@@ -1885,7 +1899,7 @@
     }
     if (linked.size) {
       const at = anchorNow();
-      for (const [block, nodes] of linked) giveRoom(block, nodes);
+      for (const [block, nodes] of linked) giveRoom(block, nodes, true);
       keepAnchor(at);
     }
     const items = [...stuck].sort(before);
