@@ -4,6 +4,17 @@
 
 [한국어](README.ko.md) · [Download](https://github.com/hyungchulc/duowide/releases/latest/download/DuoWide.zip) · [Request a site](https://github.com/hyungchulc/duowide/issues/new/choose)
 
+<div align="center">
+  <img src="media/demo.webp" width="360" alt="DuoWide in Safari on the iPhone Duo outer screen: apple.com, Netflix, Notion, Figma and The Verge laid out under the side strip">
+</div>
+
+<details>
+<summary>Full video (19 s, 60 fps)</summary>
+
+https://github.com/user-attachments/assets/64fab1b0-b13f-4736-ae52-480a993d2d6b
+
+</details>
+
 On the iPhone Duo outer screen, Safari keeps its buttons in a glass strip along the right side and lays pages out
 only up to that strip, so the 84 pt under it stays empty. DuoWide is a userscript for the free
 [Userscripts](https://apps.apple.com/us/app/userscripts/id1463298887) Safari extension. It lays pages out across the

@@ -4,6 +4,17 @@
 
 [English](README.md) · [다운로드](https://github.com/hyungchulc/duowide/releases/latest/download/DuoWide.zip) · [사이트 요청](https://github.com/hyungchulc/duowide/issues/new/choose)
 
+<div align="center">
+  <img src="media/demo.webp" width="360" alt="아이폰 듀오 바깥 화면의 Safari에서 DuoWide를 켠 apple.com, Netflix, Notion, Figma, The Verge. 페이지가 오른쪽 유리 줄 밑까지 이어집니다.">
+</div>
+
+<details>
+<summary>전체 영상 (19초, 60fps)</summary>
+
+https://github.com/user-attachments/assets/64fab1b0-b13f-4736-ae52-480a993d2d6b
+
+</details>
+
 아이폰 듀오 바깥 화면에서 Safari는 버튼을 화면 오른쪽의 유리 줄에 모아 두고, 페이지는 그 줄 앞까지만 그립니다.
 그래서 줄 밑 84pt가 비어 있습니다. DuoWide는 무료 Safari 확장 프로그램
 [Userscripts](https://apps.apple.com/us/app/userscripts/id1463298887)에서 도는 유저스크립트입니다. 페이지를 줄 밑까지
