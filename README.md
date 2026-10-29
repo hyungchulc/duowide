@@ -2,6 +2,8 @@
 
 **Web pages that use the whole iPhone Duo outer screen in Safari.**
 
+⭐ If you like DuoWide, please give it a **Star** at the top of this page. It helps other iPhone Duo users find it.
+
 [한국어](README.ko.md) · [Download](https://github.com/hyungchulc/duowide/releases/latest/download/DuoWide.zip) · [Request a site](https://github.com/hyungchulc/duowide/issues/new/choose)
 
 <div align="center">
