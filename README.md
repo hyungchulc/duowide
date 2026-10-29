@@ -123,6 +123,8 @@ updating.
 ## Known issues
 
 - Landscape isn't supported yet. Pages in landscape stay as Safari lays them out.
+- A page that keeps a menu beside the page and opens scrolled past it, such as chatgpt.com, stays at Safari's own
+  width. Widened, Safari would leave its bars behind each time it slides the menu in or out.
 - Double-tap zooms in on widened pages. Safari allows it when a page's width is set as a number, and the setting that
   turns it off can't be combined with the one that keeps the page from sliding sideways.
 - Some sites don't work well yet. Please report them.

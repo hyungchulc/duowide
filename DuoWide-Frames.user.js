@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DuoWide-Frames
 // @namespace    https://github.com/hyungchulc/duowide
-// @version      1.6.5
+// @version      1.6.6
 // @description  Part of DuoWide: keeps a widened page from sliding sideways when a swipe starts in a frame laid into it, such as an ad or an embedded video, and tells the page when a video in a frame is pressed.
 // @author       hyungchulc
 // @homepageURL  https://github.com/hyungchulc/duowide

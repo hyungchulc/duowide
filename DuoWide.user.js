@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DuoWide
 // @namespace    https://github.com/hyungchulc/duowide
-// @version      1.6.5
+// @version      1.6.6
 // @description  Lets web pages use the whole iPhone Duo outer screen in Safari, under the side strip, and keeps what you tap clear of the strip.
 // @author       hyungchulc
 // @homepageURL  https://github.com/hyungchulc/duowide
@@ -472,12 +472,14 @@
   // kept at the size the page gives them: as Safari goes to the background, iOS lays the page out for a moment twice as
   // wide to picture it for the app switcher, and Safari enlarges the words of a page that hasn't said otherwise
   // (-webkit-text-size-adjust) in boxes wider than the screen, half again as big; enlarged like that, a page came back
-  // with its words bigger than it left. (Each yields to the page's own setting.)
+  // with its words bigger than it left. (Each yields to the page's own setting.) And no ::backdrop for our boxes at the
+  // strip's edge in the top layer (see topEdge).
   function wholeScreen() {
     const live = new Set(document.styleSheets);
     const unit = dbg && dbg.vw ? dbg.vw : strip && strip.full / 100;  // (tests: a vw as Safari counts it, to see the difference)
     const text = `:root{${VIEW}:100vw}` + (strip ? `:root{--duowide-vw:${unit}px !important}:where(html[${MARK}]){-webkit-text-size-adjust:100%}` +
-      `:where(html[${BAR}]){scrollbar-color:transparent transparent}:where(html[${BAR}]>body){scrollbar-color:auto}` : "") +
+      `:where(html[${BAR}]){scrollbar-color:transparent transparent}:where(html[${BAR}]>body){scrollbar-color:auto}` +
+      `[${MARK}=edge]::backdrop{display:none!important}` : "") +
       laidOver.filter(([s]) => live.has(s)).map(([, over]) => over).join("");
     if (text !== screenText) {
       screenText = text;
@@ -560,17 +562,24 @@
   // browser scrolls still swipe (each starts afresh), and the page's own carousels still get the touches. A page that
   // already limits what a touch does keeps its own setting.
   // A page wider than the screen itself (a header laid out for a bigger screen) still pans to what is past its edge.
+  // Whether it is that wide is read afresh each time: a page may lay itself out wider once its scripts run, before the
+  // next look (chatgpt.com puts its sidebar beside the page as it starts, scrolled past it, and held at the left edge
+  // on an older answer, the sidebar slid open).
   const HOLD = "pan-y pinch-zoom";
+  const clips = (e) => !!e && /hidden|clip/.test(getComputedStyle(e).overflowX);
+  const widePage = () => document.documentElement.scrollWidth > strip.full + 8 && !clips(document.documentElement) && !clips(document.body);
   let wide = false;
   function pin() {
     if (!strip) return;
     const root = document.documentElement;
+    wide = widePage();
     if (wide || zoomed()) {  // zoomed in: the reader is panning on purpose
       if ("touch-action" in (fixed.get(root) || {})) unsetProps(root, ["touch-action"]);
       for (const el of holds) unsetProps(el, ["touch-action"]);
       holds.clear();
       holdFrames(false);
       ownBar(false);
+      if (wide && !zoomed() && !aside()) line();
       return;
     }
     ownBar(true);
@@ -579,9 +588,63 @@
     // still pushes it, and the page shook from side to side.
     const own = getComputedStyle(root).touchAction, hold = /^(auto|manipulation)$|pinch-zoom/.test(own) ? HOLD : "pan-y";
     if (root.style.getPropertyValue("touch-action") !== hold && (/^(auto|manipulation)$/.test(own) || /pan-x/.test(own))) setProp(root, "touch-action", hold);
-    // (Under a finger it is put back once the finger lifts.)
+    // (Under a finger it is put back once the finger lifts. At once: on a page that eases its own scrolling, it would
+    // be seen sliding back.)
     const x = pinX();
-    if (Math.abs(scrollX - x) > 0.5 && !touching) scrollTo(x, scrollY);
+    if (Math.abs(scrollX - x) > 0.5 && !touching) scrollTo({ left: x, top: scrollY, behavior: "instant" });
+  }
+
+  // Safari lays the fixed boxes (bars, sheets, popups) out in a part of the page as wide as the screen, which follows
+  // the part it shows, the strip's width narrower, only where that pushes against its edges. On a page wider than the
+  // screen, scrolled right (chatgpt.com starts scrolled past its sidebar, and scrolls past it again as its menu closes),
+  // it is left behind by up to the strip's width, and every fixed box shows that much further left: its left edge cut off
+  // by the screen's, its right edge before the strip, as if clear of it already. (On chatgpt.com, whose bars and box to
+  // type in are all fixed, the whole page went left with the closing menu, and came back only once put in line.)
+  // Scrolled on by as much as it lags and back, the part shown pushes it into line with the screen; the fixed boxes,
+  // pushed along as far as the page goes on, show nothing of the trip. (With the page's end in view it can't go on that
+  // far, and stays behind.) Safari draws only the last place the page was sent to in a frame, and then puts the part
+  // back where it was, so the trip there and the way back each go in a frame of their own. A page that sends itself
+  // back within the first (chatgpt.com does, as it stops, to where it means to be) makes it the same: the part comes
+  // back out of line a moment later (visualViewport scrolls), and the trip is made again. It is made once the page
+  // has stopped and done with stopping (two frames after scrollend), and never while it still slides, which would stop
+  // it where it is. That still leaves the fixed boxes behind for as long as the page slides and a moment after: a page
+  // that puts itself sideways before it is touched is left at Safari's own width instead (see aside), and this is for
+  // one sent sideways after.
+  let lined = null, lining = 0, slid = -Infinity, trip = false;  // where the page was last put in line, and how many times; until when its scrolls are ours; when it last scrolled; a trip under way
+  function line(still = false) {
+    const v = window.visualViewport;
+    if (!v || strip.side !== "right" || touching || trip || (!still && performance.now() - slid < 120)) return;
+    const root = document.documentElement, x = scrollX, y = scrollY;
+    const want = Math.min(x, root.scrollWidth - root.clientWidth);  // in line with the screen, or as far on as it goes
+    if (x - v.offsetLeft >= want - 0.5) return;
+    if (!lined || Math.abs(lined.x - x) > 0.5) lined = { x, tries: 0 };
+    if (++lined.tries > 3) return;  // (it won't stay)
+    const on = want + root.clientWidth - v.width;
+    lining = performance.now() + 600;
+    trip = true;
+    requestAnimationFrame(() => {
+      if (touching || Math.abs(scrollX - x) > 0.5) { trip = false; return; }  // (moved on meanwhile)
+      scrollTo({ left: on, top: y, behavior: "instant" });
+      // (Unless the page has gone back by then, or elsewhere.)
+      requestAnimationFrame(() => { trip = false; if (Math.abs(scrollX - on) < 0.5) scrollTo({ left: x, top: y, behavior: "instant" }); });
+    });
+    setTimeout(pin, 300);  // (to see that it stayed)
+    refixAllSoon(50);  // the bars, sheets and buttons, measured where they showed
+  }
+
+  // A page wider than the screen that has put itself sideways before anyone touched it lays itself out beside the
+  // screen on purpose and slides there and back by itself: chatgpt.com starts scrolled past the menu it keeps beside
+  // the page, scrolls back to open it and past it again to close it. Widened, its fixed boxes fall behind each slide to
+  // the right as far as the strip is wide, and show that far left until the slide is over and they are put back in line
+  // (see line): the whole page went left with the closing menu and jumped back once it had closed. At Safari's own
+  // width the part it lays them out in is the part it shows, and they keep in place. So such a page is left as it is
+  // from then on, its own viewport back. (Pages wider than the screen are panned by the reader, who has touched them by
+  // then; one Safari brings back scrolled sideways, reloaded, goes as it would without the script.)
+  function aside() {
+    if (touchedAt !== -Infinity || scrollX < 0.5 || strip.side !== "right" || passing() || !widePage()) return false;
+    yielded = true;
+    restore();
+    return true;
   }
 
   // Held at the left edge, the page is still wider than the part Safari counts as visible by the strip's width, and
@@ -876,21 +939,64 @@
   let edge = null, edgeCss = "";
   const cssOf = (css) => Object.entries(css).map(([k, v]) => `${k}:${v}!important`).join(";");
   function guardEdge() {
-    if (!strip || strip.side !== "right") { if (edge) edge.remove(); return; }
+    if (!strip || strip.side !== "right") { if (edge) edge.remove(); lifted = new Set(); return; }
     if (!edge) {
       edge = document.createElement("div");
       edge.setAttribute(MARK, "edge");
       edge.setAttribute("aria-hidden", "true");
-      edge.appendChild(document.createElement("div"));  // (an empty box with no color counts as nothing there)
+      // An empty box with no color counts as nothing there, so it holds one, which fills it: what Safari finds there
+      // first is that, a box with no ::backdrop of its own in the top layer either (see topEdge).
+      const fill = document.createElement("div");
+      fill.style.cssText = cssOf({ display: "block", width: "100%", height: "100%", margin: "0", padding: "0", border: "0", background: "none",
+        "pointer-events": "none" });
+      edge.appendChild(fill);
     }
     const { hi, max } = clearBand();
-    const css = cssOf({ position: "fixed", top: "25%", height: "50%", right: "0", left: "auto", width: `${max - hi + 8}px`, margin: "0",
-      padding: "0", border: "0", display: "block", opacity: "1", visibility: "visible", background: "none", transform: "none",
-      "pointer-events": "none", "z-index": "2147483647" });
+    const css = cssOf({ position: "fixed", top: "25%", height: "50%", right: "0", left: "auto", bottom: "auto", width: `${max - hi + 8}px`,
+      margin: "0", padding: "0", border: "0", display: "block", overflow: "visible", opacity: "1", visibility: "visible", background: "none",
+      transform: "none", "pointer-events": "none", "z-index": "2147483647" });
     if (css !== edgeCss || !edge.style.cssText) { edge.style.cssText = css; edgeCss = css; }
-    if (edge.parentNode === document.documentElement) return;
-    document.documentElement.appendChild(edge);
-    if (document.body) release();
+    const back = edge.parentNode !== document.documentElement;
+    if (back) {
+      document.documentElement.appendChild(edge);
+      lifted = new Set();  // (in again, under all the top layer holds)
+    }
+    topEdge(!back);
+    if (back && document.body) release();
+  }
+
+  // What the page shows in the top layer (a dialog shown over the page, a popover: a sign-in sheet, a menu) is drawn over
+  // all the rest, ours as well: Safari finds it at the strip's edge and paints the strip in one solid color for as long
+  // as it shows, hiding what the page draws under the strip (chatgpt.com's sign-in sheet beside a black strip). While the
+  // page has one open, ours goes into the top layer too, after it, as a popover of its own, which takes no touches and
+  // no focus; once the page has none open it comes back out, so that the page's own rules on what is open don't count
+  // it. Safari looks through what takes no touches, the rest of the page held still under a dialog included, but takes
+  // a box in the top layer that it finds itself, rather than one inside it, for a dimmed page by its ::backdrop: ours
+  // has none, and what it finds is the box inside it (see guardEdge). Shown in the same task as the page's, or in the
+  // frame it is drawn in, it is there before Safari looks; shown later (one the browser tells only afterwards),
+  // Safari's color is let go of as well.
+  let lifted = new Set();  // the page's ones in the top layer, ours went in after
+  function topOnes() {
+    const out = [];
+    for (const sel of ["dialog:modal", ":popover-open"]) {
+      try {
+        for (const root of [document, ...shadows]) for (const e of root.querySelectorAll(sel)) if (!e.hasAttribute(MARK)) out.push(e);
+      } catch (e) { /* (no top layer of that kind) */ }
+    }
+    return out;
+  }
+  function topEdge(late = false) {
+    if (!edge || !edge.isConnected) return;
+    const ones = topOnes(), fresh = ones.some((e) => !lifted.has(e));
+    lifted = new Set(ones);
+    if (!ones.length) { if (edge.hasAttribute("popover")) edge.removeAttribute("popover"); return; }
+    if (!fresh) return;
+    try {
+      if (edge.getAttribute("popover") !== "manual") edge.setAttribute("popover", "manual");
+      if (edge.matches(":popover-open")) edge.hidePopover();
+      edge.showPopover();
+    } catch (e) { return; }  // (no popovers)
+    if (late) release();
   }
 
   // A page may take it out (a framework putting <html> back the way it rendered it, as mlb.com's does once it starts):
@@ -914,9 +1020,12 @@
     const stand = document.createElement("div");
     stand.setAttribute(MARK, "edge");
     stand.setAttribute("aria-hidden", "true");
-    stand.style.cssText = cssOf({ position: "fixed", inset: "0", margin: "0", padding: "0", border: "0", display: "block", opacity: "1",
-      visibility: "visible", background: "rgba(128, 128, 128, 0.01)", transform: "none", "pointer-events": "none", "z-index": "2147483647" });
+    stand.style.cssText = cssOf({ position: "fixed", inset: "0", width: "auto", height: "auto", margin: "0", padding: "0", border: "0",
+      display: "block", overflow: "visible", opacity: "1", visibility: "visible", background: "rgba(128, 128, 128, 0.01)", transform: "none",
+      "pointer-events": "none", "z-index": "2147483647" });
     document.documentElement.appendChild(stand);
+    // (Over what the page shows in the top layer, in there too: see topEdge.)
+    if (lifted.size) try { stand.setAttribute("popover", "manual"); stand.showPopover(); } catch (e) { /* (no popovers) */ }
     requestAnimationFrame(() => requestAnimationFrame(() => stand.remove()));
   }
 
@@ -944,8 +1053,6 @@
       if (all) {
         lastFull = performance.now();
         wholeScreen();  // (sheets and rules the page added since)
-        const clips = (e) => !!e && /hidden|clip/.test(getComputedStyle(e).overflowX);
-        wide = document.documentElement.scrollWidth > strip.full + 8 && !clips(document.documentElement) && !clips(document.body);
         pin();
         scanMovers(band, boxes);
         holdBoxes();
@@ -1735,7 +1842,7 @@
   function keepAnchor(a) {
     if (!a || !a.el.isConnected) return;
     const d = a.el.getBoundingClientRect().top - a.top;
-    if (Math.abs(d) > 0.5) scrollTo(pinX(), scrollY + d);
+    if (Math.abs(d) > 0.5) scrollTo({ left: wide ? scrollX : pinX(), top: scrollY + d, behavior: "instant" });
   }
 
   // How a look measures things against the strip.
@@ -2173,6 +2280,19 @@
     // over whole instead; otherwise it keeps its place. Each one is checked with those before it in place.
     const shifts = [], tried = new Set();
     const shiftOf = (g, cs, dx) => {
+      // One the page moves itself by its translate (a sheet's close button eased in, at 0px once in), placed apart
+      // from the rest, moves by whichever of its margins moves it, which leaves that alone (see nudge). Null if neither.
+      if (cs.translate !== "none") {
+        const was = g.getBoundingClientRect().left;
+        for (const [p, sign] of [["margin-left", 1], ["margin-right", -1]]) {
+          const props = { [p]: `${(parseFloat(cs.getPropertyValue(p)) || 0) + sign * dx}px` };
+          setProp(g, p, props[p], "");
+          const moved = Math.abs(g.getBoundingClientRect().left - (was + dx)) < 1;
+          unsetProps(g, [p]);
+          if (moved) return { props };
+        }
+        return null;
+      }
       // Text-level elements ignore translate, so they are offset in place instead.
       if (cs.display !== "inline") return { props: { translate: `${dx}px 0px` } };
       if (cs.position === "static") return { props: { position: "relative", left: `${dx}px` } };
@@ -2191,7 +2311,8 @@
         if (cell && g.contains(cell)) { trace(g0, "shift", g, "a table's cell"); break; }
         tried.add(g);
         const cs = getComputedStyle(g);
-        if (cs.translate !== "none") { trace(g0, "shift", g, "page moves it"); break; }  // the page moves it itself
+        // (One the page moves itself by its translate keeps its place among the rest, which its margins would move too.)
+        if (cs.translate !== "none" && !/absolute|fixed/.test(cs.position)) { trace(g0, "shift", g, "page moves it"); break; }
         const r = g.getBoundingClientRect();
         // (A carousel's tall side arrow is narrow, and placed by itself: it moves like any button.)
         if (r.height > 160 && !(r.width <= 64 && /absolute|fixed/.test(cs.position))) { trace(g0, "shift", g, "too tall"); break; }
@@ -2218,6 +2339,7 @@
         const laid = seen.some((m) => m.kind === "text" && !g.contains(m.node) && seen.some((i) => g.contains(i.node) && i.kind !== "tap" && covers(i.q, m.q)));
         const under = liesOn([g], seen);
         const shift = shiftOf(g, cs, dx);
+        if (!shift) { trace(g0, "shift", g, "page moves it"); break; }
         for (const [p, v] of Object.entries(shift.props)) setProp(g, p, v, "");
         let now = marks(scope || document.body, r.top, r.bottom);
         // Buttons it lands on beside it on its line, its size or a little bigger (a carousel's page count beside its
@@ -2395,11 +2517,20 @@
     };
     changes = new MutationObserver((records) => {
       // (Not the scroll bar we draw, moved as the page scrolls.)
-      records = records.filter((rec) => rec.target !== bar && !(rec.type === "childList" && [...rec.addedNodes, ...rec.removedNodes].every((n) => n === bar)));
+      // (Nor our box at the strip's edge going into the top layer and out, see topEdge.)
+      records = records.filter((rec) => rec.target !== bar && !(rec.type === "childList" && [...rec.addedNodes, ...rec.removedNodes].every((n) => n === bar)) &&
+        !(rec.type === "attributes" && rec.target.nodeType === 1 && rec.target.getAttribute(MARK) === "edge"));
       if (!records.length) return;
       if (records.some((rec) => [...rec.addedNodes, ...rec.removedNodes].some((n) => n.nodeName === "META"))) consider();
       if (!strip) return;
       edgeTaken();
+      // A dialog the page shows over the page (its open attribute set as it goes in) has ours go in after it, in the
+      // same task (see topEdge).
+      const dialogs = records.filter((rec) => rec.attributeName === "open" && rec.target.localName === "dialog");
+      if (dialogs.length) {
+        for (const rec of dialogs) if (rec.target.hasAttribute("open")) lifted.delete(rec.target);
+        topEdge();
+      }
       if (records.some((rec) => [...rec.addedNodes].some((n) => n.nodeName === "STYLE"))) wholeScreen();
       if (records.some((rec) => rec.addedNodes.length)) { refixAllSoon(); fitLinesSoon(records.flatMap((rec) => [...rec.addedNodes])); }
       if (!records.some((rec) => rec.type === "attributes")) return;
@@ -2424,7 +2555,10 @@
       repaintSoon();
       const el = e.target;
       if (el === document) {
+        if (aside()) return;  // (before Safari draws it widened there)
         scrolledBar();
+        slid = performance.now();
+        if (lined && performance.now() > lining && Math.abs(scrollX - lined.x) > 0.5) lined = null;  // (moved on since)
         // (Slid by a finger the page never saw, one that came down on a frame from elsewhere, or still gliding: put
         // back once it is still, not against the finger, which shook the page from side to side, nor the glide.)
         clearTimeout(pinTimer);
@@ -2440,7 +2574,27 @@
       else if (Math.abs(el.scrollTop - scanTops.get(el)) > 2 * innerHeight) { scanTops.set(el, el.scrollTop); refixAllSoon(0); }
       refixSoon(300);
     }, { passive: true, capture: true });  // (a box's own scrolling reaches the window only on the way down)
+    // A page that slides itself sideways (chatgpt.com closing its menu) is put in line as soon as it has stopped (see
+    // line): a frame after scrollend, its own trip a frame later still; not once more as that trip ends. Put back out of
+    // line by Safari all the same, it is put in line again at once.
+    document.addEventListener("scrollend", (e) => {
+      if (!strip || e.target !== document || performance.now() <= lining || zoomed() || !widePage()) return;
+      const was = slid;
+      requestAnimationFrame(() => { if (slid === was) line(true); });
+    });
+    if (window.visualViewport) visualViewport.addEventListener("scroll", () => {
+      if (strip && lined && !trip && performance.now() < lining && Math.abs(scrollX - lined.x) < 0.5) line(true);
+    });
     addEventListener("transitionend", (e) => { if (strip && e.target !== bar) repaintSoon(); }, { passive: true, capture: true });
+    // A popover the page shows (and a dialog, where the browser tells it beforehand) has ours go in after it in the frame
+    // it is drawn in; one the browser tells of only once it shows, at once (see topEdge).
+    const theirs = (e) => strip && e.target instanceof Element && !e.target.hasAttribute(MARK);
+    addEventListener("beforetoggle", (e) => {
+      if (!theirs(e)) return;
+      if (e.newState === "open") lifted.delete(e.target);
+      requestAnimationFrame(() => topEdge());
+    }, true);
+    addEventListener("toggle", (e) => { if (theirs(e)) topEdge(true); }, true);
     // A frame asks whether to hold itself as its page starts, and tells whether that page holds a video (see waits).
     addEventListener("message", (e) => {
       if (!e.source || typeof e.data !== "string") return;
@@ -2533,7 +2687,7 @@
   }
 
   if (dbg) dbg.refix = () => refix(true);
-  if (dbg) dbg.state = () => ({ orig, ours, own: !!own, strip, stripPhone, yielded, scaled, asleep, rewrites: rewrites.length, others: others.size, edge: !!(edge && edge.isConnected), bar: document.documentElement.hasAttribute(BAR), fixed: fixed.size, movers: movers.length, insets: insets.size, content: meta?.getAttribute("content") || null });
+  if (dbg) dbg.state = () => ({ orig, ours, own: !!own, strip, stripPhone, yielded, scaled, asleep, rewrites: rewrites.length, others: others.size, edge: !!(edge && edge.isConnected), edgeOver: lifted.size, bar: document.documentElement.hasAttribute(BAR), fixed: fixed.size, movers: movers.length, insets: insets.size, content: meta?.getAttribute("content") || null });
   if (dbg) dbg.movers = () => movers.map((m) => ({ el: m.el.id || m.el.localName, cls: String(m.el.className).slice(0, 40), text: (m.el.textContent || "").trim().slice(0, 30), props: m.props }));
   if (dbg) dbg.insets = () => [...insets.keys()].map((e) => ({ el: e.id || e.localName, cls: String(e.className).slice(0, 40), text: (e.textContent || "").trim().replace(/\s+/g, " ").slice(0, 30) }));
   start();
