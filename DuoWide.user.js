@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DuoWide
 // @namespace    https://github.com/hyungchulc/duowide
-// @version      1.6.2
+// @version      1.6.3
 // @description  Lets web pages use the whole iPhone Duo outer screen in Safari, under the side strip, and keeps what you tap clear of the strip.
 // @author       hyungchulc
 // @homepageURL  https://github.com/hyungchulc/duowide
@@ -786,6 +786,10 @@
     painting.clear();
   }
 
+  // What a box's padding and borders add to the width it is given, unless that width counts them already.
+  const besides = (cs) => (cs.boxSizing === "border-box" ? 0 :
+    ["paddingLeft", "paddingRight", "borderLeftWidth", "borderRightWidth"].reduce((s, k) => s + (parseFloat(cs[k]) || 0), 0));
+
   // What a box keeps from the screen's edge on the strip's side, up to 16px: it keeps as much from the strip once inside.
   const margin = (r) => { const { min, max } = clearBand(); return Math.max(0, Math.min(16, strip.side === "right" ? max - r.right : r.left - min)); };
 
@@ -1135,8 +1139,7 @@
         if (clear && Math.abs(a.left - r.left) < 1 && Math.abs(a.right - r.right) < 1) return;
         unsetProps(box, [side, "box-sizing"]);
       }
-      const extra = cs.boxSizing === "border-box" ? 0 :
-        ["paddingLeft", "paddingRight", "borderLeftWidth", "borderRightWidth"].reduce((a, k) => a + (parseFloat(cs[k]) || 0), 0);
+      const extra = besides(cs);
       setProp(box, "width", Math.max(0, right - left - extra) + "px");
       setProp(box, "min-width", "0px");
       const moved = box.getBoundingClientRect();
@@ -1432,8 +1435,7 @@
     const b = block.getBoundingClientRect(), cs = getComputedStyle(block);
     if (b.height > (tall ? 160 : 64)) return null;
     const own = parseFloat(cs.getPropertyValue(side)) || 0;
-    const extra = cs.boxSizing === "border-box" ? 0 :
-      ["paddingLeft", "paddingRight", "borderLeftWidth", "borderRightWidth"].reduce((s, k) => s + (parseFloat(cs[k]) || 0), 0);
+    const extra = besides(cs);
     // A margin narrows a bar sized by its parent; one given a width of its own is held to a narrower one.
     const kept = () => {
       const a = block.getBoundingClientRect();
@@ -1805,45 +1807,59 @@
     // narrower, as on a phone without the strip: its full screen and sound buttons sit on its own edges where the
     // script can't move them (see playerOf). Pictures that move run under the strip; one in a fixed box goes with it.
     for (const el of document.querySelectorAll(MEDIA)) {
-      const box = playerOf(el);
-      if (!box || insets.has(box) || !usable(box)) continue;
-      const r = box.getBoundingClientRect();
-      if (r.width < 120 || r.height < 80 || !onScreen(r) || !hidden(r.left, r.right)) continue;
-      const cs = getComputedStyle(box);
-      const extra = cs.boxSizing === "border-box" ? 0 :
-        ["paddingLeft", "paddingRight", "borderLeftWidth", "borderRightWidth"].reduce((s, k) => s + (parseFloat(cs[k]) || 0), 0);
-      const end = hi - margin(r);
-      const props = { "max-width": `${(right ? end - r.left : r.right - lo - margin(r)) - extra}px` };
-      if (!right) props["margin-left"] = "auto";  // (held to a narrower width, it keeps to the far edge)
-      // (One its box centers keeps its left edge, as at the start of a narrower box.)
-      else if (!/^inline/.test(cs.display)) props["margin-left"] = cs.marginLeft;
-      const around = [];  // the boxes around it, where they started
-      for (let p = box.parentElement, i = 0; right && p && p !== document.body && i < 8; p = p.parentElement, i++) around.push([p, p.getBoundingClientRect().left]);
-      for (const [p, v] of Object.entries(props)) setProp(box, p, v);
-      let a = box.getBoundingClientRect(), held = null;
-      if (right && a.right > hi + 0.5 && a.left > r.left + 0.5) {
-        // A box around it that narrows with it and is centered in its own came in with it (a wiki's table holding a
-        // video): that box keeps its left edge instead.
-        let moved = null;
-        for (const [p, left] of around) { if (p.getBoundingClientRect().left > left + 0.5) moved = p; else break; }
-        if (moved && !/^inline/.test(getComputedStyle(moved).display)) {
-          held = moved;
-          setProp(held, "margin-left", `${parseFloat(getComputedStyle(held).marginLeft) - (held.getBoundingClientRect().left - around.find(([p]) => p === held)[1])}px`);
-          a = box.getBoundingClientRect();
-          if (a.right > hi + 0.5 || Math.abs(a.left - r.left) > 0.5) { unsetProps(held, ["margin-left"]); held = null; a = box.getBoundingClientRect(); }
+      const player = playerOf(el);
+      if (!player || insets.has(player) || !usable(player)) continue;
+      const pr = player.getBoundingClientRect();
+      if (pr.width < 120 || pr.height < 80 || !onScreen(pr) || !hidden(pr.left, pr.right)) continue;
+      // One laid over a box that keeps its shape (an embed filling a box as tall as a share of its width) narrows with
+      // the boxes around it that hold nothing else, the outermost first, so that it keeps its shape too; failing that,
+      // on its own.
+      const tries = [player];
+      if (getComputedStyle(player).position === "absolute") {
+        for (let p = player.parentElement, i = 0; p && p !== document.body && i < 4; p = p.parentElement, i++) {
+          const q = p.getBoundingClientRect();
+          if (/^table/.test(getComputedStyle(p).display) || [q.left - pr.left, q.right - pr.right, q.top - pr.top, q.bottom - pr.bottom].some((d) => Math.abs(d) > 1)) break;
+          tries.unshift(p);
         }
       }
-      if (right && !held && a.right > hi + 0.5 && a.left > r.left + 0.5) {
-        // Laid in a centered line, it narrows from both sides: narrower by twice what still lies under the strip.
-        const w = parseFloat(props["max-width"]) - 2 * (a.right - end);
-        if (w >= 120) { props["max-width"] = `${w}px`; setProp(box, "max-width", props["max-width"]); a = box.getBoundingClientRect(); }
-      }
-      // (It stays within where it was, only ending before the strip.)
-      if (right ? a.right <= hi + 0.5 && a.left >= r.left - 0.5 : a.left >= lo - 0.5 && Math.abs(a.right - r.right) < 1) { insets.set(box, []); trace(box, "player"); }
-      else {
-        unsetProps(box, Object.keys(props));
-        if (held) unsetProps(held, ["margin-left"]);
-        trace(box, "player", "would not narrow");
+      for (const box of tries) {
+        const r = box.getBoundingClientRect();
+        const cs = getComputedStyle(box);
+        const extra = besides(cs);
+        const end = hi - margin(r);
+        const props = { "max-width": `${(right ? end - r.left : r.right - lo - margin(r)) - extra}px` };
+        if (!right) props["margin-left"] = "auto";  // (held to a narrower width, it keeps to the far edge)
+        // (One placed against the right edge of its box keeps its left edge instead, as does one its box centers.)
+        else if (cs.position === "absolute") Object.assign(props, { left: `${box.offsetLeft - (parseFloat(cs.marginLeft) || 0)}px`, right: "auto" });
+        else if (!/^inline/.test(cs.display)) props["margin-left"] = cs.marginLeft;
+        const around = [];  // the boxes around it, where they started
+        for (let p = box.parentElement, i = 0; right && p && p !== document.body && i < 8; p = p.parentElement, i++) around.push([p, p.getBoundingClientRect().left]);
+        for (const [p, v] of Object.entries(props)) setProp(box, p, v);
+        let a = box.getBoundingClientRect(), held = null;
+        if (right && a.right > hi + 0.5 && a.left > r.left + 0.5) {
+          // A box around it that narrows with it and is centered in its own came in with it (a wiki's table holding a
+          // video): that box keeps its left edge instead.
+          let moved = null;
+          for (const [p, left] of around) { if (p.getBoundingClientRect().left > left + 0.5) moved = p; else break; }
+          if (moved && !/^inline/.test(getComputedStyle(moved).display)) {
+            held = moved;
+            setProp(held, "margin-left", `${parseFloat(getComputedStyle(held).marginLeft) - (held.getBoundingClientRect().left - around.find(([p]) => p === held)[1])}px`);
+            a = box.getBoundingClientRect();
+            if (a.right > hi + 0.5 || Math.abs(a.left - r.left) > 0.5) { unsetProps(held, ["margin-left"]); held = null; a = box.getBoundingClientRect(); }
+          }
+        }
+        if (right && !held && a.right > hi + 0.5 && a.left > r.left + 0.5) {
+          // Laid in a centered line, it narrows from both sides: narrower by twice what still lies under the strip.
+          const w = parseFloat(props["max-width"]) - 2 * (a.right - end);
+          if (w >= 120) { props["max-width"] = `${w}px`; setProp(box, "max-width", props["max-width"]); a = box.getBoundingClientRect(); }
+        }
+        // (It stays within where it was, only ending before the strip.)
+        if (right ? a.right <= hi + 0.5 && a.left >= r.left - 0.5 : a.left >= lo - 0.5 && Math.abs(a.right - r.right) < 1) { insets.set(box, []); trace(box, "player"); break; }
+        else {
+          unsetProps(box, Object.keys(props));
+          if (held) unsetProps(held, ["margin-left"]);
+          trace(box, "player", "would not narrow");
+        }
       }
     }
 
@@ -1851,7 +1867,8 @@
     const { single, multi, giveRoom } = fitLines(band, usable);
 
     // Read everything first and write afterwards, so the page lays out a few times per look, not once per item.
-    const stuck = new Set(), carousels = new Set(), linked = new Map();  // linked: words around a link under the strip
+    // linked: words around a link under the strip; tabled: what is under the strip in a table
+    const stuck = new Set(), carousels = new Set(), linked = new Map(), tabled = [];
     // A link to the page a wider one in its row opens (a list's comment count beside its title, or its picture): the
     // wider one gets the reader there. Links that only act on this page (#, a script's) don't count.
     const here = location.origin + location.pathname + location.search;
@@ -1884,6 +1901,7 @@
         trace(el, inText(el) ? "in text" : inFixed(el, boxes) ? "in a fixed box" : "hidden");
         // A link in a sentence comes in with its lines: on the right, the words around it are given room after all.
         if (right && inText(el) && visible(el)) {
+          if (el.closest("table")) tabled.push(el);
           for (let e = el.parentElement; e && e !== document.body; e = e.parentElement) {
             const nodes = multi.get(e) || single.get(e);
             if (nodes) { linked.set(e, nodes); break; }
@@ -1895,11 +1913,70 @@
       const c = carouselOf(el) || scrollerBeside(el);
       if (c) carousels.add(c);
       if (c) trace(el, "carousel", c, inSlides(el, c) ? "swiped" : "its button");
-      if (!c || !inSlides(el, c)) stuck.add(el.matches(FIELD) ? frameOf(el) : el);
+      if (!c || !inSlides(el, c)) {
+        stuck.add(el.matches(FIELD) ? frameOf(el) : el);
+        if (right && el.closest("table")) tabled.push(el);
+      }
     }
-    if (linked.size) {
-      const at = anchorNow();
-      for (const [block, nodes] of linked) giveRoom(block, nodes, true);
+    // A table keeps its cells in their columns: one with a place to press under the strip comes inside whole, laid out
+    // as on a phone without the strip, its words wrapping onto more lines and its pictures smaller if they must (a
+    // wiki's table of a tournament's rounds, the last one under the strip). A cell given room squeezes the ones beside
+    // it, and one slid over lands on the next one and takes its taps.
+    if (tabled.length || linked.size) {
+      const at = anchorNow(), seenTables = new Set(), tablesIn = new Set();
+      // One too wide to come in that is laid in a box scrolling sideways (a wiki's) slides in it instead, as on a phone
+      // without the strip: the box ends before the strip, and the reader swipes the rest out from under it.
+      const slide = (t, el) => {
+        for (let s = t.parentElement, i = 0; s && s !== document.body && i < 3; s = s.parentElement, i++) {
+          const cs = getComputedStyle(s);
+          if (!/auto|scroll/.test(cs.overflowX)) continue;
+          const b = s.getBoundingClientRect(), px = need(b);
+          // (A box for the table, not one a whole page or article scrolls in.)
+          if (px < 1 || b.width - px < b.width / 2 || b.height > t.getBoundingClientRect().height + 40) return false;
+          const props = { "max-width": `${b.width - px - besides(cs)}px` };
+          if (!/^inline/.test(cs.display)) props["margin-left"] = cs.marginLeft;
+          for (const [p, v] of Object.entries(props)) setProp(s, p, v, "");
+          const a = s.getBoundingClientRect(), slides = a.right <= hi + 0.5 && Math.abs(a.left - b.left) < 1 && s.scrollWidth > s.clientWidth + 1;
+          trace(el, "table", s, slides ? "slides" : "would not slide");
+          if (slides) { insets.set(s, []); return true; }
+          unsetProps(s, Object.keys(props));
+          return false;
+        }
+        return false;
+      };
+      for (const el of tabled) {
+        if (!stuckControl(el)) continue;  // its table came in already
+        let outer = null;  // the outermost one reaching under the strip
+        for (let t = el.closest("table"); t && !insets.has(t); t = t.parentElement && t.parentElement.closest("table")) {
+          if (seenTables.has(t)) continue;
+          seenTables.add(t);
+          if (!usable(t)) break;
+          const b = t.getBoundingClientRect(), cs = getComputedStyle(t), px = need(b);
+          if (b.right <= hi + 0.5 || b.width - px < b.width / 2) continue;  // (one around it may)
+          outer = t;
+          const extra = besides(cs);
+          const block = !/^inline/.test(cs.display), was = parseFloat(cs.marginLeft) || 0;
+          const props = { "max-width": `${b.width - px - extra}px` };
+          if (block) props["margin-left"] = `${was}px`;  // (a centered one keeps its left edge)
+          const seen = marks(t, b.top, b.bottom);
+          for (const [p, v] of Object.entries(props)) setProp(t, p, v, "");
+          let a = t.getBoundingClientRect();
+          // One that can't be that narrow (pictures side by side) and stands away from the left of the box it is in (a
+          // centered one) goes over to the left as well, as far as that box lets it.
+          if (block && a.right > b.right - px + 0.5) {
+            const hb = t.parentElement.getBoundingClientRect(), hs = getComputedStyle(t.parentElement);
+            const left = Math.max(hb.left + (parseFloat(hs.borderLeftWidth) || 0) + (parseFloat(hs.paddingLeft) || 0), a.left - (a.right - (b.right - px)));
+            if (left < a.left - 0.5) { props["margin-left"] = `${Math.round((was - (a.left - left)) * 100) / 100}px`; setProp(t, "margin-left", props["margin-left"], ""); a = t.getBoundingClientRect(); }
+          }
+          const now = seen && marks(t, a.top, a.bottom), lost = !!(now && gone(seen, now));
+          const inside = a.right <= hi + 0.5 && a.left <= b.left + 0.5;
+          trace(el, "table", t, !inside ? "can't narrow" : lost ? "gone from sight" : stuckControl(el) ? "still stuck" : "in");
+          if (inside && !lost && !stuckControl(el)) { insets.set(t, []); tablesIn.add(t); outer = null; break; }
+          unsetProps(t, Object.keys(props));
+        }
+        if (outer && slide(outer, el)) tablesIn.add(outer);
+      }
+      for (const [block, nodes] of linked) if (![...tablesIn].some((t) => t.contains(block))) giveRoom(block, nodes, true);
       keepAnchor(at);
     }
     const items = [...stuck].sort(before);
@@ -2009,9 +2086,17 @@
       if (cs.position === "static") return { props: { position: "relative", left: `${dx}px` } };
       return { props: { left: `${(parseFloat(cs.left) || 0) + dx}px` } };
     };
+    // A box takes the taps where it lies, words on it or not: one slid over may not lie on a good part of a place to
+    // press that it didn't lie on before (a table's cell slid onto the next one took the taps of that one's link).
+    const liesOn = (els, list) => list.filter((m) => m.kind === "tap" && !els.some((e) => e.contains(m.node) || m.node.contains(e)) &&
+      els.some((e) => [...e.getClientRects()].some((q) => Math.max(0, Math.min(q.right, m.q.right) - Math.max(q.left, m.q.left)) *
+        Math.max(0, Math.min(q.bottom, m.q.bottom) - Math.max(q.top, m.q.top)) > 0.25 * m.q.width * m.q.height)));
     for (const g0 of groups) {
       if ([...groups].some((o) => o !== g0 && o.contains(g0))) continue;
+      // (A table's cell keeps its column: it doesn't slide, and what slides inside one stays in it.)
+      const cell = g0.closest("td, th"), cellBox = cell && cell.getBoundingClientRect();
       for (let g = g0, steps = 0; g && g !== document.body && steps < 4 && !tried.has(g); g = g.parentElement, steps++) {
+        if (cell && g.contains(cell)) { trace(g0, "shift", g, "a table's cell"); break; }
         tried.add(g);
         const cs = getComputedStyle(g);
         if (cs.translate !== "none") { trace(g0, "shift", g, "page moves it"); break; }  // the page moves it itself
@@ -2024,6 +2109,7 @@
         if (r.left + dx < lo - 0.5 || r.right + dx > hi + 0.5) { trace(g0, "shift", g, "too wide"); break; }
         const clip = clipOf(g);  // nor may it slide out of a card that would cut it off
         if (clip && (r.left + dx < clip.left - 0.5 || r.right + dx > clip.right + 0.5)) { trace(g0, "shift", g, "clipped"); break; }
+        if (cell && (r.left + dx < cellBox.left - 0.5 || r.right + dx > cellBox.right + 0.5)) { trace(g0, "shift", g, "out of its cell"); break; }
         // What it might land on: the nearest box around it that spans the way it would go, and all of its height (an
         // icon that hangs below its row reaches the next one). Not words around it: their box takes in all the lines
         // they run over, not the place it would land (a list's next item beside it on its line).
@@ -2038,6 +2124,7 @@
         // One laid over the end of words (a "more" on the last line of text held to a few lines) hides them on purpose:
         // slid over alone, it would leave them showing and lie on others, so the words it then lies on make way too.
         const laid = seen.some((m) => m.kind === "text" && !g.contains(m.node) && seen.some((i) => g.contains(i.node) && i.kind !== "tap" && covers(i.q, m.q)));
+        const under = liesOn([g], seen);
         const shift = shiftOf(g, cs, dx);
         for (const [p, v] of Object.entries(shift.props)) setProp(g, p, v, "");
         let now = marks(scope || document.body, r.top, r.bottom);
@@ -2093,9 +2180,11 @@
           }
           now = made.includes(null) ? null : marks(scope || document.body, r.top, r.bottom);
         }
+        const takes = now ? liesOn([g, ...along.map((a) => a.el)], now).filter((m) => !under.some((u) => u.node === m.node)) : [];
         trace(g0, "shift", g, now ? (worse(overlaps(seen, unit), overlaps(now, unit)) ? "new overlap" : "no new overlap") : "words would not make way", scope, along.length ? "along " + along.length : "",
-          now && now.filter((m) => !unit.contains(m.node) && now.some((i) => unit.contains(i.node) && covers(i.q, m.q))).map((m) => m.kind + ":" + (m.node.nodeType === 3 ? m.node.data.trim().slice(0, 20) : m.node.localName + "." + String(m.node.className).slice(0, 20))));
-        if (now && !worse(overlaps(seen, unit), overlaps(now, unit)) && !broken(seen, now)) {
+          now && now.filter((m) => !unit.contains(m.node) && now.some((i) => unit.contains(i.node) && covers(i.q, m.q))).map((m) => m.kind + ":" + (m.node.nodeType === 3 ? m.node.data.trim().slice(0, 20) : m.node.localName + "." + String(m.node.className).slice(0, 20))),
+          takes.length ? "takes the taps of " + takes.map((m) => m.node.localName + "." + String(m.node.className).slice(0, 20)).join(", ") : "");
+        if (now && !takes.length && !worse(overlaps(seen, unit), overlaps(now, unit)) && !broken(seen, now)) {
           shifts.push({ el: g, ...shift }, ...along);
           for (const m of made) pads.push({ ...m, by: g });  // they make way for it
           break;
