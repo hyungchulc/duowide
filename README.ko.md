@@ -29,7 +29,8 @@ https://github.com/user-attachments/assets/64fab1b0-b13f-4736-ae52-480a993d2d6b
 - 페이지가 화면 폭을 다 씁니다(382pt 대신 466pt). 사진, 배경, 막대 색은 줄 밑까지 이어지고, 줄은 밑이 비치는 유리로
   남습니다.
 - 줄에 가려 누를 수 없게 되는 링크, 버튼, 입력칸은 안쪽으로 옮깁니다.
-- 문단, 댓글처럼 줄을 따라 읽는 글은 줄 앞에서 줄을 바꿔서, 글줄 끝이 버튼 밑에 들어가지 않습니다.
+- 문단, 댓글처럼 줄을 따라 읽는 글은 줄 앞에서 줄을 바꿔서, 글줄 끝이 버튼 밑에 들어가지 않습니다. 한 줄에 글자를 더
+  많이 보고 싶다면 [넓은 글](#넓은-글-선택) 스위치를 더합니다.
 - 메뉴, 탭 막대 같은 고정 막대는 줄 앞에서 끝나고, 막대 색은 줄 밑까지 이어집니다.
 - 옆으로 넘기는 목록(캐러셀)은 끝에 여유를 둬서, 마지막 항목까지 줄 밑에서 꺼내 볼 수 있습니다.
 - 버튼을 옮길 수 없는 영상 플레이어(다른 사이트에서 끼워 넣은 플레이어, Safari 기본 컨트롤이 달린 영상)는 누르기
@@ -63,10 +64,41 @@ https://github.com/user-attachments/assets/64fab1b0-b13f-4736-ae52-480a993d2d6b
 [DuoWide-Frames.user.js](https://raw.githubusercontent.com/hyungchulc/duowide/main/DuoWide-Frames.user.js)도 똑같이
 합니다.
 
+## 넓은 글 (선택)
+
+DuoWide는 문단, 댓글처럼 줄을 따라 읽는 글을 버튼 줄 앞에서 줄 바꿈해서, 글줄 끝이 Safari 버튼 밑에 들어가지 않게
+합니다. 페이지를 확대해서 보는 등 한 줄에 글자를 더 많이 보고 싶다면 선택 파일 `DuoWide-WideText.user.js`를
+더합니다.
+
+- 글줄이 버튼 줄 밑, 화면 끝까지 이어집니다. 버튼 줄 밑의 글자는 유리 너머로 비쳐 보입니다. 버튼 바로 밑을 지나는
+  글자만 가려지고, 스크롤하면 버튼을 지나 보입니다.
+- 링크가 버튼 줄 밑에 들어가게 되는 문단만은 그대로 버튼 줄 앞에서 줄을 바꿔서, 링크는 계속 누를 수 있습니다. 링크와
+  버튼, 메뉴, 표, 영상은 전과 같습니다.
+- `DuoWide.user.js`를 위한 스위치라 혼자서는 아무것도 하지 않습니다. 폴더에 있으면 켜진 채로 돌기 때문에
+  `DuoWide.zip`에는 넣지 않았고, 원하는 사람만 더합니다.
+
+**더하기**
+
+1. Userscripts 확장 프로그램을 켠 상태로, iPhone의 Safari에서
+   [DuoWide-WideText.user.js](https://raw.githubusercontent.com/hyungchulc/duowide/main/DuoWide-WideText.user.js)를
+   엽니다.
+2. Safari의 확장 프로그램 메뉴에서 Userscripts를 열고 설치 안내를 누릅니다. 스크립트가 다른 두 스크립트와 같은
+   Userscripts 폴더에 저장됩니다.
+3. 보던 페이지를 새로고침합니다.
+
+[최신 릴리스](https://github.com/hyungchulc/duowide/releases/latest)의 **Assets**에서 `DuoWide-WideText.user.js`를
+내려받아, 다른 두 스크립트가 있는 폴더에 넣어도 됩니다. 그다음 Safari에서 Userscripts 메뉴를 한 번 열어야 새 파일을
+읽습니다.
+
+**끄기와 다시 켜기**
+
+Safari의 확장 프로그램 메뉴에서 Userscripts를 열고, 목록에서 **DuoWide-WideText**를 눌러 끄거나 다시 켠 뒤 페이지를
+새로고침합니다. 꺼 두면 업데이트해도 다시 켤 때까지 꺼진 채로 있습니다. 아예 빼려면 폴더에서 파일을 지웁니다.
+
 ## 업데이트
 
-두 스크립트는 이 저장소에서 새 버전을 확인합니다. 새 버전이 나오면 Safari의 Userscripts 메뉴에 보이니 **Update All**을
-누릅니다. 새 zip을 받아 두 파일을 바꿔 넣어도 됩니다.
+스크립트는 이 저장소에서 새 버전을 확인합니다. 새 버전이 나오면 Safari의 Userscripts 메뉴에 보이니 **Update All**을
+누릅니다. 새 zip을 받아 두 파일을 바꿔 넣어도 됩니다(DuoWide-WideText를 쓴다면 릴리스에서 그 파일도).
 
 ## 설정
 

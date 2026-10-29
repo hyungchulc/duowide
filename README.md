@@ -29,7 +29,8 @@ whole screen, under the strip, and keeps everything you tap clear of it.
 - Pages use the full width of the screen (466 pt instead of 382 pt). Photos, backgrounds and bar colors run under the
   strip, which stays see-through glass.
 - Links, buttons and text fields that the strip would cover move inward, so you can still tap them.
-- Paragraphs, comments and other running text wrap before the strip, so no line ends under its buttons.
+- Paragraphs, comments and other running text wrap before the strip, so no line ends under its buttons. To fit more
+  words on a line instead, add the optional [wide text](#wide-text-optional) switch.
 - Menus, tab bars and other fixed bars end before the strip, and their color carries on under it.
 - Carousels get room at the end, so you can swipe the last item out from under the strip.
 - Video players whose buttons can't be moved (players embedded from other sites, videos with Safari's own controls)
@@ -64,10 +65,43 @@ whole screen, under the strip, and keeps everything you tap clear of it.
 Safari's extension menu, and tap the install prompt. Do the same for
 [DuoWide-Frames.user.js](https://raw.githubusercontent.com/hyungchulc/duowide/main/DuoWide-Frames.user.js).
 
+## Wide text (optional)
+
+By default, DuoWide wraps paragraphs, comments and other running text before the strip, so no line ends under
+Safari's buttons. If you'd rather fit more words on a line, for example with the page zoomed in, add the optional
+`DuoWide-WideText.user.js`:
+
+- Lines of text run on under the strip, to the edge of the screen. They show through the glass. Only the letters
+  passing right under a button are hidden, and scrolling brings them past it.
+- A paragraph whose link would end up under the strip still wraps before it, so the link stays tappable. Links,
+  buttons, menus, tables and videos are handled as before.
+- It is a switch for `DuoWide.user.js` and does nothing on its own. A script in the folder is on, so it isn't in
+  `DuoWide.zip`: it is there only if you add it.
+
+**Add it**
+
+1. With the Userscripts extension on, open
+   [DuoWide-WideText.user.js](https://raw.githubusercontent.com/hyungchulc/duowide/main/DuoWide-WideText.user.js) in
+   Safari on the iPhone.
+2. Open Userscripts from Safari's extension menu and tap the install prompt. It saves the script in your Userscripts
+   folder, next to the other two.
+3. Reload the page you're reading.
+
+Or download `DuoWide-WideText.user.js` from the [latest release](https://github.com/hyungchulc/duowide/releases/latest)
+(under **Assets**) and move it into the folder with the other two scripts. Then open the Userscripts menu in Safari
+once, so that it picks up the new file.
+
+**Turn it off or back on**
+
+Open Userscripts from Safari's extension menu, tap **DuoWide-WideText** in the list to turn it off (or back on), and
+reload the page. It stays off through updates until you turn it back on. To remove it, delete the file from the
+folder.
+
 ## Updates
 
-Both scripts check this repository for new versions. When one is out, it shows in the Userscripts menu in Safari: tap
-**Update All**. You can also download the new zip and replace the two files.
+The scripts check this repository for new versions. When one is out, it shows in the Userscripts menu in Safari: tap
+**Update All**. You can also download the new zip and replace the two files (and `DuoWide-WideText.user.js` from the
+release, if you use it).
 
 ## Settings
 

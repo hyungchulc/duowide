@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DuoWide
 // @namespace    https://github.com/hyungchulc/duowide
-// @version      1.6.4
+// @version      1.6.5
 // @description  Lets web pages use the whole iPhone Duo outer screen in Safari, under the side strip, and keeps what you tap clear of the strip.
 // @author       hyungchulc
 // @homepageURL  https://github.com/hyungchulc/duowide
@@ -42,6 +42,9 @@
   const BAR = MARK + "-bar";  // on <html> while the page's scroll bars are ours
   const RATIO = MARK + "-ratio";  // on <html> while widened: the whole screen over the part shown (see scriptWidth)
   const dbg = window.__duoWideDebug;  // tests: { strip: { side, gap, full } } stands in for the measured strip
+  // DuoWide-WideText.user.js, while it is on in the Userscripts menu, asks for lines of words to run on under the strip
+  // too (see fitLines). Userscripts runs it in this same content world, before or after this script.
+  const wideText = () => window.__duoWideText === "wide";
 
   const store = {
     async get(key, fallback) {
@@ -1745,7 +1748,9 @@
     // How far a box gives way to clear the strip: what it keeps from the screen's edge (up to 16px) it keeps from the
     // strip, rather than ending against it.
     const need = (b) => Math.min(strip.gap, right ? b.right - hi + margin(b) : lo - b.left + margin(b));
-    return { right, onScreen, hidden, need };
+    // A place to press that shows too little of itself beside the strip to be pressed (see stuckControl).
+    const covered = (r) => Math.min(r.right, hi) - Math.max(r.left, lo) < Math.min(pt(TAP), r.width * 0.7) - 0.5;
+    return { right, onScreen, hidden, need, covered };
   }
 
   // Text first: on the left it changes the page's height, so the rest is measured after it. A strip on the left hides
@@ -1755,11 +1760,14 @@
   // two, a title in a list that wraps (held to a few lines, it shows fewer words). Left as they are: a table's cells,
   // code, a bar of links or buttons (they move by themselves, below), a short label at the end of a row (a nickname, a
   // time), which starts under the strip or is too short to be a line of words, words held on one line, which room
-  // would only cut shorter, and a box that would squeeze its pictures.
+  // would only cut shorter, and a box that would squeeze its pictures. With DuoWide-WideText on, the reader would
+  // rather have more words on a line: those on the right run on under the strip as pictures do, all but the ones
+  // around a link of theirs that it covers, which come in for the link to be pressed.
   // Returns the blocks of words it found, on one line and on several, and how it gives one room.
   function fitLines(band, usable) {
-    const { lo, hi } = band, { right, onScreen, hidden, need } = reach(band);
+    const { lo, hi } = band, { right, onScreen, hidden, need, covered } = reach(band);
     const { single, multi, long } = lineBlocks(hidden, onScreen);
+    const wide = right && wideText();
     let lasting = new Map([...multi, ...single]);
     if (right) {
       const reads = (b, nodes) => {
@@ -1783,7 +1791,11 @@
         // the next.)
         return own >= all / 2 || b.querySelectorAll(CONTROL).length < 2 || t.lines > 1;
       };
-      lasting = new Map([...multi, ...long, ...single].filter(([b, nodes]) => reads(b, nodes)));
+      const linkUnder = (b, nodes) => nodes.some((n) => {
+        const c = n.parentElement.closest(CONTROL), r = c && c.getBoundingClientRect();
+        return !!c && c !== b && b.contains(c) && onScreen(r) && covered(r);
+      });
+      lasting = new Map([...multi, ...long, ...single].filter(([b, nodes]) => reads(b, nodes) && (!wide || linkUnder(b, nodes))));
       // (The outer box first: a paragraph inside one that made room is clear of the strip already.)
       const depth = (e) => { let d = 0; for (let p = e.parentElement; p; p = p.parentElement) d++; return d; };
       lasting = new Map([...lasting].sort((a, b) => depth(a[0]) - depth(b[0])));
@@ -1806,13 +1818,13 @@
       if ("box-shadow" in room.props) { shades.set(block, { gap: px, h: block.getBoundingClientRect().height }); shadeSizes.observe(block); }
     };
     const anchor = lasting.size ? anchorNow() : null;
-    for (const [block, nodes] of lasting) giveRoom(block, nodes);
+    for (const [block, nodes] of lasting) giveRoom(block, nodes, wide);
     keepAnchor(anchor);
     return { single, multi, giveRoom };
   }
 
   function scanMovers(band, boxes) {
-    const { lo, hi, min, max } = band, { right, onScreen, hidden, need } = reach(band), full = max - min;
+    const { lo, hi, min, max } = band, { right, onScreen, hidden, need, covered } = reach(band), full = max - min;
     const trace = dbg && dbg.trace ? (el, ...why) => dbg.trace.push([el, ...why]) : () => {};  // tests: why something stayed
     for (const m of movers) unsetProps(m.el, Object.keys(m.props));
     movers = [];
@@ -1837,7 +1849,7 @@
       // It is pressed on the part that shows, if that is as wide as the smallest button (a big one half under the strip,
       // a grid's last column, is pressed beside it) or most of a small one; a wide one shows its end (a row's ›, a
       // team's logo) under the strip with the words.
-      return onScreen(r) && (el.matches(FIELD) || fieldFrames.has(el) ? hidden(r.left, r.right) : Math.min(r.right, hi) - Math.max(r.left, lo) < Math.min(pt(TAP), r.width * 0.7) - 0.5);
+      return onScreen(r) && (el.matches(FIELD) || fieldFrames.has(el) ? hidden(r.left, r.right) : covered(r));
     };
     const visible = (el) => !(el.checkVisibility && !el.checkVisibility({ visibilityProperty: true }));
     const usable = (el) => !inFixed(el, boxes) && !carouselOf(el) && visible(el);
