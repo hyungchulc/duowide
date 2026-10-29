@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DuoWide
 // @namespace    https://github.com/hyungchulc/duowide
-// @version      1.6.3
+// @version      1.6.4
 // @description  Lets web pages use the whole iPhone Duo outer screen in Safari, under the side strip, and keeps what you tap clear of the strip.
 // @author       hyungchulc
 // @homepageURL  https://github.com/hyungchulc/duowide
@@ -806,15 +806,22 @@
   // Fixed boxes on the page, outermost only, hidden ones too (a bar that appears once the page scrolls). Safari does not
   // hit-test under its strip, so they are found by walking the page: a fixed box has no offsetParent, and a box with no
   // offsetParent and no boxes at all is not rendered. Widgets a page takes from elsewhere keep theirs inside a component
-  // of their own (a shop's overseas-cart bar): its open inside is walked as well.
+  // of their own (a shop's overseas-cart bar): its open inside is walked as well. The open insides the walk goes through
+  // are kept for the look that follows, which finds players in them too (see scanMovers), and watched for players
+  // coming into them (a video's picture that turns into its frame when pressed).
   const holderOf = new WeakMap();  // fixed box -> the fixed box it is in, if any
+  let shadows = [];  // the open insides of components the last walk went through
+  const shadowsWatched = new WeakSet();
+  const shadowAdds = new MutationObserver((records) => {
+    if (strip && records.some((rec) => [...rec.addedNodes].some((n) => n.nodeType === Node.ELEMENT_NODE && (n.matches(MEDIA) || !!n.querySelector(MEDIA))))) refixAllSoon();
+  });
   function fixedBoxes() {
-    const found = [];
+    const found = [], roots = [];
     const walk = (root) => {
       let within = null;  // the fixed box the walk is in
       const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
         acceptNode(el) {
-          const inside = () => { if (el.shadowRoot) walk(el.shadowRoot); };
+          const inside = () => { if (el.shadowRoot) { roots.push(el.shadowRoot); walk(el.shadowRoot); } };
           while (within && !within.contains(el)) within = holderOf.get(within) || null;
           // A fixed box in one that slides as a whole (a menu coming in from the side, its close button placed past
           // its edge) is placed against that one, which then counts as its offsetParent: it is known by its style.
@@ -838,10 +845,18 @@
       while (walker.nextNode());
     };
     walk(document.body);
+    shadows = roots;
+    for (const s of roots) if (!shadowsWatched.has(s)) {
+      shadowsWatched.add(s);
+      shadowAdds.observe(s, { childList: true, subtree: true });
+      for (const type of ["load", "play"]) s.addEventListener(type, noteMedia, true);
+    }
     return found;
   }
 
-  const inFixed = (el, boxes) => { for (let e = el; e && e !== document.body; e = e.parentElement) if (boxes.has(e)) return true; return false; };
+  // The box a box is laid in, out of a component's open inside into the page as well.
+  const up = (e) => e.parentElement || (e.parentNode && e.parentNode.host) || null;
+  const inFixed = (el, boxes) => { for (let e = el; e && e !== document.body; e = up(e)) if (boxes.has(e)) return true; return false; };
 
   const watched = new WeakSet();
   const sizes = new ResizeObserver(() => { if (strip) refixSoon(60); });
@@ -1020,6 +1035,30 @@
     const q = m.getBoundingClientRect();
     return q.width >= r.width * 0.5 && q.height >= 80;
   });
+
+  // A player is left as it is until it is pressed or plays: a picture under the strip with its play button in the
+  // middle, as a wiki's video component shows one before it lays in its frame. Then it ends before the strip (see
+  // scanMovers), where its own buttons can be pressed. A video with the browser's own buttons shows only that button
+  // until it first plays. A frame's page tells whether it holds a video and when it is first pressed or plays
+  // (DuoWide-Frames.user.js); a frame holding none (a map), or one that can't tell, ends before the strip once its
+  // page has loaded, as before, and one in a component's inside at once (it may have loaded before a look found it).
+  const frameSaid = new WeakMap();  // a frame's window -> what its page last told: "page" (it is there), "video", "plain", "used"
+  const framesLoaded = new WeakSet();
+  function waits(player) {
+    if (player.localName === "video") return player.paused && !player.played.length;
+    if (!/^i?frame$/.test(player.localName)) return false;
+    const said = player.contentWindow && frameSaid.get(player.contentWindow);
+    if (said) return said === "video" || said === "page";
+    return player.getRootNode() === document && !framesLoaded.has(player);
+  }
+  // (A frame whose page loaded, a player that started.)
+  function noteMedia(e) {
+    const el = e.target;
+    if (!(el instanceof Element)) return;
+    const frame = e.type === "load" && /^i?frame$/.test(el.localName);
+    if (frame) framesLoaded.add(el);
+    if (strip && (frame || (e.type === "play" && el.localName === "video" && playerOf(el)))) refixAllSoon(frame ? 300 : 0);
+  }
 
 
   // A fixed box that reaches into the strip: Safari takes every touch on its strip, empty parts included, so bars and
@@ -1233,14 +1272,14 @@
   // A box that only cuts off the end of its row (a menu a little too wide) is no carousel: one the page's script slides
   // has its slides moved (translated, or the box scrolled), or holds a good part of a screen more than it shows.
   function carouselOf(el) {
-    for (let e = el.parentElement; e && e !== document.body; e = e.parentElement) {
+    for (let e = up(el); e && e !== document.body; e = up(e)) {
       if (e.scrollWidth <= e.clientWidth + 1) continue;
       const cs = getComputedStyle(e);
       if (/auto|scroll/.test(cs.overflowX)) return e;
       // (Not a whole page's wrapper: one taller than most of a screen, measured the same way the phone is held.)
       if (!/hidden|clip/.test(cs.overflowX) || e.getBoundingClientRect().height >= Math.max(innerWidth, innerHeight) * 0.8) continue;
       if (e.scrollLeft > 0 || e.scrollWidth > e.clientWidth * 1.5) return e;
-      for (let s = el; s && s !== e; s = s.parentElement) {
+      for (let s = el; s && s !== e; s = up(s)) {
         const ss = getComputedStyle(s);
         if (ss.transform !== "none" || ss.translate !== "none") return e;
       }
@@ -1803,20 +1842,23 @@
     const visible = (el) => !(el.checkVisibility && !el.checkVisibility({ visibilityProperty: true }));
     const usable = (el) => !inFixed(el, boxes) && !carouselOf(el) && visible(el);
 
-    // Players first, as they may get shorter. One under the strip ends before it for good, its picture a little
-    // narrower, as on a phone without the strip: its full screen and sound buttons sit on its own edges where the
-    // script can't move them (see playerOf). Pictures that move run under the strip; one in a fixed box goes with it.
-    for (const el of document.querySelectorAll(MEDIA)) {
+    // Players first, as they may get shorter. One under the strip ends before it for good once it is pressed or plays
+    // (see waits), its picture a little narrower, as on a phone without the strip: its full screen and sound buttons
+    // sit on its own edges where the script can't move them (see playerOf). Pictures that move run under the strip; one
+    // in a fixed box goes with it. A component may lay one in its own open inside: a wiki's video is a picture with a
+    // play button that turns into its frame there when pressed, under the strip until the next look.
+    for (const el of [document, ...shadows].flatMap((root) => [...root.querySelectorAll(MEDIA)])) {
       const player = playerOf(el);
       if (!player || insets.has(player) || !usable(player)) continue;
       const pr = player.getBoundingClientRect();
       if (pr.width < 120 || pr.height < 80 || !onScreen(pr) || !hidden(pr.left, pr.right)) continue;
+      if (waits(player)) { trace(player, "player", "waits to be pressed"); continue; }
       // One laid over a box that keeps its shape (an embed filling a box as tall as a share of its width) narrows with
       // the boxes around it that hold nothing else, the outermost first, so that it keeps its shape too; failing that,
       // on its own.
       const tries = [player];
       if (getComputedStyle(player).position === "absolute") {
-        for (let p = player.parentElement, i = 0; p && p !== document.body && i < 4; p = p.parentElement, i++) {
+        for (let p = up(player), i = 0; p && p !== document.body && i < 4; p = up(p), i++) {
           const q = p.getBoundingClientRect();
           if (/^table/.test(getComputedStyle(p).display) || [q.left - pr.left, q.right - pr.right, q.top - pr.top, q.bottom - pr.bottom].some((d) => Math.abs(d) > 1)) break;
           tries.unshift(p);
@@ -1833,7 +1875,7 @@
         else if (cs.position === "absolute") Object.assign(props, { left: `${box.offsetLeft - (parseFloat(cs.marginLeft) || 0)}px`, right: "auto" });
         else if (!/^inline/.test(cs.display)) props["margin-left"] = cs.marginLeft;
         const around = [];  // the boxes around it, where they started
-        for (let p = box.parentElement, i = 0; right && p && p !== document.body && i < 8; p = p.parentElement, i++) around.push([p, p.getBoundingClientRect().left]);
+        for (let p = up(box), i = 0; right && p && p !== document.body && i < 8; p = up(p), i++) around.push([p, p.getBoundingClientRect().left]);
         for (const [p, v] of Object.entries(props)) setProp(box, p, v);
         let a = box.getBoundingClientRect(), held = null;
         if (right && a.right > hi + 0.5 && a.left > r.left + 0.5) {
@@ -2037,13 +2079,51 @@
       }
     }
 
+    // Items of one list look alike (a notification list's cards): where room in some brings their controls in while the
+    // controls of others still lie under the strip (room there would re-wrap or hide some of their words), those give
+    // their room back and all of them slide their controls over, below, rather than every other card ending before the
+    // strip. One that then can't slide over takes its room again. Items are boxes one under another in one box, of one
+    // tag and kind (their first class, or list items), starting at one left edge.
+    const itemOf = (el) => {
+      for (let a = el; a.parentElement && a.parentElement !== document.body; a = a.parentElement) {
+        const kind = a.classList[0];
+        if (!kind && a.localName !== "li") continue;
+        const left = a.getBoundingClientRect().left;
+        if ([...a.parentElement.children].some((s) => s !== a && s.localName === a.localName && s.classList[0] === kind && Math.abs(s.getBoundingClientRect().left - left) < 1)) return a;
+      }
+      return null;
+    };
+    const lists = new Map();  // a list -> its items here with their controls, whether room brought some in, whether some are out
+    for (const el of items) {
+      const item = itemOf(el);
+      if (!item) continue;
+      const list = lists.get(item.parentElement) || { els: [], roomy: false, out: false };
+      list.els.push([el, item]);
+      if (stillStuck(el)) list.out = true;
+      else if (pads.some((m) => item.contains(m.el) && m.el.contains(el))) list.roomy = true;
+      lists.set(item.parentElement, list);
+    }
+    const alike = new Map();  // a control that slides over with the rest of its list -> the room its item gave back
+    for (const { els, roomy, out } of lists.values()) {
+      if (!roomy || !out) continue;
+      for (const [el, item] of els) {
+        const i = pads.findIndex((m) => item.contains(m.el) && m.el.contains(el));
+        alike.set(el, i < 0 ? null : pads[i]);
+        if (i < 0) continue;
+        trace(el, "pad", pads[i].el, "given back: others of its list slide over");
+        unsetProps(pads[i].el, Object.keys(pads[i].props));
+        padded.delete(pads[i].el);
+        pads.splice(i, 1);
+      }
+    }
+
     // A control no row can make room for without growing taller gets room for good from the nearest box around it
     // that can give it, its lines wrapping onto more lines if they must (a grid of buttons with one fewer to a row), as
     // running text does: controls stay inside at every height, so this changes the page once, not while scrolling.
     const held = anchorNow();
     let grew = false;
     for (const el of items) {
-      if (!stillStuck(el)) continue;
+      if (!stillStuck(el) || alike.has(el)) continue;
       for (const row of rowsOf(el, lo, hi, innerHeight)) {
         if (padded.has(row)) break;
         const b = row.getBoundingClientRect();
@@ -2194,6 +2274,14 @@
         unsetProps(g, Object.keys(shift.props));
       }
     }
+    // (One of a list that could not slide over after all takes its room again.)
+    for (const [el, pad] of alike) {
+      if (!pad || !stillStuck(el) || padded.has(pad.el)) continue;
+      for (const [p, v] of Object.entries(pad.props)) setProp(pad.el, p, v, "");
+      trace(el, "pad", pad.el, "taken again: it can't slide over");
+      pads.push(pad);
+      padded.add(pad.el);
+    }
     // Room that hides some of its row (see gone) is the last resort, for a control nothing else brought in: the page
     // itself hides those on a phone that narrow, and the control can be pressed.
     for (const [el, { row, again }] of lossy) {
@@ -2341,7 +2429,16 @@
       refixSoon(300);
     }, { passive: true, capture: true });  // (a box's own scrolling reaches the window only on the way down)
     addEventListener("transitionend", (e) => { if (strip && e.target !== bar) repaintSoon(); }, { passive: true, capture: true });
-    addEventListener("message", (e) => { if (e.data === "duowide:ask" && e.source) e.source.postMessage(framesHeld ? "duowide:hold" : "duowide:free", "*"); });
+    // A frame asks whether to hold itself as its page starts, and tells whether that page holds a video (see waits).
+    addEventListener("message", (e) => {
+      if (!e.source || typeof e.data !== "string") return;
+      if (e.data === "duowide:ask") { e.source.postMessage(framesHeld ? "duowide:hold" : "duowide:free", "*"); frameSaid.set(e.source, "page"); return; }
+      const told = /^duowide:(video|plain|used)$/.exec(e.data);
+      if (!told || frameSaid.get(e.source) === "used") return;
+      frameSaid.set(e.source, told[1]);
+      if (strip && told[1] !== "video") refixAllSoon(told[1] === "used" ? 0 : 300);
+    });
+    for (const type of ["load", "play"]) document.addEventListener(type, noteMedia, true);
     // A style sheet that comes in may size things in vw (see wholeScreen).
     document.addEventListener("load", (e) => { if (strip && e.target instanceof Element && e.target.localName === "link") wholeScreen(); }, true);
     addEventListener("touchstart", () => { touching = true; touchedAt = performance.now(); }, { passive: true, capture: true });

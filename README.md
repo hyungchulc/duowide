@@ -33,7 +33,8 @@ whole screen, under the strip, and keeps everything you tap clear of it.
 - Menus, tab bars and other fixed bars end before the strip, and their color carries on under it.
 - Carousels get room at the end, so you can swipe the last item out from under the strip.
 - Video players whose buttons can't be moved (players embedded from other sites, videos with Safari's own controls)
-  end before the strip, so full screen and volume stay tappable.
+  run under the strip like pictures until you tap or play them. Then they end before the strip, so full screen and
+  volume stay tappable.
 - The page doesn't slide sideways. Pinch zoom and the edge swipes for back and forward still work. DuoWide draws the
   page's scroll bar itself, so iOS's sideways scroll bar doesn't show along the bottom.
 - On other iPhones, iPad, Mac and the unfolded iPhone Duo screen, it changes nothing.
@@ -46,7 +47,7 @@ whole screen, under the strip, and keeps everything you tap clear of it.
    Files app (Downloads) to unzip it. The `DuoWide` folder holds two scripts. Keep both:
    - `DuoWide.user.js` does the work.
    - `DuoWide-Frames.user.js` keeps the page from sliding when a swipe starts in a frame inside it, such as an ad or
-     an embedded video.
+     an embedded video, and tells the page when you tap an embedded video.
 
    Move the folder somewhere it can stay, such as iCloud Drive or On My iPhone.
 3. Open the Userscripts app, tap **Change Userscripts Directory**, and choose the `DuoWide` folder.

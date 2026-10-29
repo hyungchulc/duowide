@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         DuoWide-Frames
 // @namespace    https://github.com/hyungchulc/duowide
-// @version      1.6.3
-// @description  Part of DuoWide: keeps a widened page from sliding sideways when a swipe starts in a frame laid into it, such as an ad or an embedded video.
+// @version      1.6.4
+// @description  Part of DuoWide: keeps a widened page from sliding sideways when a swipe starts in a frame laid into it, such as an ad or an embedded video, and tells the page when a video in a frame is pressed.
 // @author       hyungchulc
 // @homepageURL  https://github.com/hyungchulc/duowide
 // @supportURL   https://github.com/hyungchulc/duowide/issues
@@ -52,15 +52,33 @@
     }
   }
 
+  // A frame playing a video (an embedded player) is left as it is by the page until it is pressed or plays, a picture
+  // under the strip with its play button in the middle, and then ends before the strip, where its own buttons can be
+  // pressed (see waits in DuoWide.user.js). The page is told whether this page holds a video, as soon as one is there or
+  // once it has loaded (or a few seconds after it was read, should loading go on), and when it is first pressed or
+  // plays. What its own frames tell of their videos goes on up.
+  let said = "";
+  function say(what) {
+    if (said === what || said === "used" || (what === "plain" && said)) return;
+    said = what;
+    parent.postMessage("duowide:" + what, "*");
+  }
+  const look = (last) => { if (document.querySelector("video")) say("video"); else if (last) say("plain"); };
+  const read = () => { look(false); setTimeout(() => look(true), 3000); };
+  for (const type of ["click", "play"]) document.addEventListener(type, () => say("used"), true);
+
   addEventListener("message", (e) => {
     if (e.data === "duowide:ask" && e.source) { e.source.postMessage(on ? "duowide:hold" : "duowide:free", "*"); return; }
+    if (e.source !== parent && (e.data === "duowide:video" || e.data === "duowide:used")) { say(e.data.slice(8)); return; }
     if (e.source !== parent || (e.data !== "duowide:hold" && e.data !== "duowide:free")) return;
     on = e.data === "duowide:hold";
     hold();
     tell();
   });
   // (Its page laid out, its body there.)
-  document.addEventListener("DOMContentLoaded", hold);
-  addEventListener("load", hold);
+  document.addEventListener("DOMContentLoaded", () => { hold(); read(); });
+  addEventListener("load", () => { hold(); look(true); });
   parent.postMessage("duowide:ask", "*");
+  if (document.readyState === "interactive") read();
+  else if (document.readyState === "complete") look(true);
 })();
