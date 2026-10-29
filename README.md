@@ -75,8 +75,8 @@ Safari's buttons. If you'd rather fit more words on a line, for example with the
   passing right under a button are hidden, and scrolling brings them past it.
 - A paragraph whose link would end up under the strip still wraps before it, so the link stays tappable. Links,
   buttons, menus, tables and videos are handled as before.
-- It is a switch for `DuoWide.user.js` and does nothing on its own. A script in the folder is on, so it isn't in
-  `DuoWide.zip`: it is there only if you add it.
+- It is a switch for `DuoWide.user.js` 1.6.5 or later and does nothing on its own, so update DuoWide first if yours is
+  older. A script in the folder is on, so it isn't in `DuoWide.zip`: it is there only if you add it.
 
 **Add it**
 
