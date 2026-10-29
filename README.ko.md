@@ -3,6 +3,7 @@
 **Safari 웹페이지가 아이폰 듀오 바깥 화면을 끝까지 씁니다.**
 
 ⭐ DuoWide가 마음에 드셨다면 이 페이지 위쪽의 **Star**를 눌러 주세요. 다른 아이폰 듀오 사용자들이 DuoWide를 찾는 데 도움이 됩니다.
+[![GitHub stars](https://img.shields.io/github/stars/hyungchulc/duowide?style=social)](https://github.com/hyungchulc/duowide/stargazers)
 
 [English](README.md) · [다운로드](https://github.com/hyungchulc/duowide/releases/latest/download/DuoWide.zip) · [사이트 요청](https://github.com/hyungchulc/duowide/issues/new/choose)
 
