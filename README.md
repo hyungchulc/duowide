@@ -41,7 +41,10 @@ whole screen, under the strip, and keeps everything you tap clear of it.
   volume stay tappable.
 - The page doesn't slide sideways. Pinch zoom and the edge swipes for back and forward still work. DuoWide draws the
   page's scroll bar itself, so iOS's sideways scroll bar doesn't show along the bottom.
-- On other iPhones, iPad, Mac and the unfolded iPhone Duo screen, it changes nothing.
+- In split view on the unfolded screen (Safari beside another app), the page's colors and backgrounds run on under
+  Safari's strip on the window's side too, while text, pictures and buttons stay clear of it. To leave split view as
+  Safari lays it out, set `split` to `false`.
+- On other iPhones, iPad, Mac, and the unfolded iPhone Duo screen when Safari has all of it, it changes nothing.
 
 ## Install
 
@@ -116,6 +119,7 @@ release, if you use it).
 | `landscape` | `false` | Widen pages in landscape too. Not supported yet. |
 | `left` | `false` | With `landscape` on, widen pages when the strip is on the left too. |
 | `bar` | `true` | Hide iOS's sideways scroll bar and draw the up-and-down one in its place. `false` keeps iOS's bars. |
+| `split` | `true` | In split view on the unfolded screen, run the page's colors under Safari's strip too. `false` leaves split view as Safari lays it out. |
 
 Edit the file with an editor app that can edit files in place. An update replaces the file, so set these again after
 updating.

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DuoWide-WideText
 // @namespace    https://github.com/hyungchulc/duowide
-// @version      1.6.6
+// @version      2.0.0
 // @description  Optional part of DuoWide: lets lines of text run on under the side strip too, so more words fit on a line. A paragraph with a link the strip would cover still ends before it. Turn it off in the Userscripts menu to wrap text before the strip again.
 // @author       hyungchulc
 // @homepageURL  https://github.com/hyungchulc/duowide
