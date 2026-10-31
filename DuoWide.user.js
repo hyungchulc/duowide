@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DuoWide
 // @namespace    https://github.com/hyungchulc/duowide
-// @version      2.0.1
+// @version      2.0.2
 // @description  Lets web pages use the whole iPhone Duo outer screen in Safari, under the side strip, and keeps what you tap clear of the strip.
 // @author       hyungchulc
 // @homepageURL  https://github.com/hyungchulc/duowide
@@ -98,6 +98,25 @@
     return k > 0 ? k : 1;
   }
 
+  // Safari's fingerprinting protection (in private tabs, and wherever Settings > Apps > Safari > Advanced > Advanced
+  // Tracking and Fingerprinting Protection puts it) hides the screen from pages: screen reads the first of a few
+  // iPhones' sizes at least as wide as it, 414×896 for any wider (as the folded screen's 466 is), and the window's
+  // outer size reads as its inner one (WebKit's screenSizeForFingerprintingProtections). The strip can't be measured
+  // then: read off a screen 414 wide, it came to 32, and pages were left as Safari lays them out (GitHub issue #2). A
+  // window that shows less than the narrowest screen read so (one 391 to 414 wide, or wider, reads 414) has something
+  // beside it all the same, and it is taken for Safari's strip, as wide as it measures where the screen can be read:
+  // 84 points, on the folded screen (466 less 382) and beside another window (469 less 385). Other phones show the
+  // whole width of their screen, more than the narrowest one read so (a 393 one reads 414 too), and are left alone as
+  // before. (The height tells the outer size from the inner: the width may be read as the page's scripts read it, see
+  // PAGE_WIDTH, where ours runs in the page's own world, as in the lab.)
+  const STANDINS = [[320, 568], [375, 667], [390, 844], [414, 896]];
+  const STRIP_PT = 84;
+  const screenHidden = () => outerHeight === innerHeight && STANDINS.some(([w, h]) => screen.width === w && screen.height === h);
+  function hiddenStrip(shown) {
+    const i = screenHidden() ? STANDINS.findIndex(([w]) => w === screen.width) : -1;
+    return i > 0 && shown < STANDINS[i - 1][0] ? STRIP_PT : 0;
+  }
+
   // Safari reports the part of the page it shows as the visual viewport and the folded screen as screen.width/height,
   // before and after the page is widened. The strip sits on the camera side: right when upright or turned with the
   // camera down, left when turned the other way. Pinched, or on the way back out, the page is left as it is (see
@@ -114,8 +133,8 @@
     // A strip on the left hides where lines begin, and keeping them clear of it would push the whole page back over:
     // Safari's own layout, which starts after it, is left as it is unless asked for.
     if (!side || (side === "left" && !CONFIG.left)) return null;
-    const full = o === "landscape" ? Math.max(screen.width, screen.height) : Math.min(screen.width, screen.height);
-    const { zoom, view, shown } = scales();
+    const { zoom, view, shown } = scales(), hidden = hiddenStrip(shown);
+    const full = hidden ? shown + hidden : o === "landscape" ? Math.max(screen.width, screen.height) : Math.min(screen.width, screen.height);
     const gap = full - shown;
     if (gap < STRIP[0] || gap > STRIP[1]) return null;
     if (o === "portrait" && !stripPhone) { stripPhone = true; store.set("stripPhone", true); }
@@ -135,7 +154,7 @@
   // past the window's edge. What the page shows keeps to the middle, and only its colors run on to the ends (see frame).
   function beside() {
     const { zoom, view, shown } = scales();
-    const gap = outerWidth - shown;
+    const gap = hiddenStrip(shown) || outerWidth - shown;
     if (gap < STRIP[0] || gap > STRIP[1]) return null;
     const width = Math.round((shown + 2 * gap) / view);
     return { side: "both", gap: gap / zoom, full: (width * view) / zoom, width, zoom, height: innerHeight * tagScale() };
@@ -224,8 +243,9 @@
   // moment later are the window's own: the page starts again from its own layout (see afresh). A moment is as long as
   // a turn only for a window as wide as the screen one way round or the other, as a window turning is: one of another
   // width (469 beside another window, 950 across the unfolded screen) is the window's own at once, rather than showing
-  // the folded screen's layout for 0.75 seconds as it opens. (A window whose width isn't known is taken as turning.)
-  const fillsScreen = () => !(outerWidth > 0) || [screen.width, screen.height].some((s) => Math.abs(outerWidth - s) <= 1);
+  // the folded screen's layout for 0.75 seconds as it opens. (A window whose width isn't known, as where Safari hides
+  // the screen (see hiddenStrip), is taken as turning.)
+  const fillsScreen = () => !(outerWidth > 0) || screenHidden() || [screen.width, screen.height].some((s) => Math.abs(outerWidth - s) <= 1);
   let oddAt = 0, oddDue = 0;
   function lasting() {
     const wait = fillsScreen() ? 750 : 100;
@@ -1001,7 +1021,8 @@
     barFrame = requestAnimationFrame(() => {
       barFrame = 0;
       const root = document.documentElement, z = strip ? strip.zoom : 1;  // (worked out in points, as iOS draws it)
-      const H = innerWidth > innerHeight ? Math.min(screen.width, screen.height) : Math.max(screen.width, screen.height);
+      // (Where Safari hides the screen (see hiddenStrip), along the window's height.)
+      const H = screenHidden() ? innerHeight * z : innerWidth > innerHeight ? Math.min(screen.width, screen.height) : Math.max(screen.width, screen.height);
       const track = H - 2 * TRACK.ends, page = root.scrollHeight * z, seen = innerHeight * z, max = root.scrollHeight - innerHeight;
       if (!root.hasAttribute(BAR) || max < 1 || track < TRACK.min) return;
       const over = Math.max(0, -scrollY, scrollY - max) * z;  // (pulled past either end, it shortens, as iOS's does)
