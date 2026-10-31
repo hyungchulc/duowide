@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DuoWide
 // @namespace    https://github.com/hyungchulc/duowide
-// @version      2.0.0
+// @version      2.0.1
 // @description  Lets web pages use the whole iPhone Duo outer screen in Safari, under the side strip, and keeps what you tap clear of the strip.
 // @author       hyungchulc
 // @homepageURL  https://github.com/hyungchulc/duowide
@@ -1761,7 +1761,7 @@
   const framed = (e) => keepers.has(e) || handed.has(e);
   const EDGE_PROPS = ["border-image-source", "border-image-slice", "border-image-width", "border-image-outset", "border-image-repeat"];
   const FRAME_PROPS = ["padding-left", "padding-right", "box-sizing", "border-left-width", "border-left-style", "border-left-color",
-    "border-right-width", "border-right-style", "border-right-color", ...EDGE_PROPS];
+    "border-right-width", "border-right-style", "border-right-color", "aspect-ratio", ...EDGE_PROPS];
   const edged = new Set();    // keepers holding it as a clear border (see holding)
   const WHOLE = /^(img|picture|video|canvas|iframe|embed|object|svg|table|input|select|textarea|button)$/;  // (laid out whole: no room goes into one)
 
@@ -1843,6 +1843,23 @@
     const ml = parseFloat(cs.marginLeft) || 0, mr = parseFloat(cs.marginRight) || 0;  // (one that depends on the box it is in: min(), a percentage)
     return !(ml > 1 && Math.abs(ml - mr) < 1);
   }
+  // A box whose height follows its width (aspect-ratio: a card's picture, a banner, a video's frame) would grow taller
+  // with the room, what it shows drawn larger and cut anew, the page under it pushed down: it keeps the room itself, at
+  // the height it has in Safari's own layout (see holdAll), one placed across another too. (OpenAI's home draws a card's
+  // picture 4:5 in boxes 4:5 over a gray box of the same shape, shown while the picture loads: handed the room, the
+  // boxes grew by half, the picture drawn larger, and the gray box showed under the strips beside it. As tall as before,
+  // the box around the picture carries its edges on over the gray one.) Its width over its height, on the box its
+  // box-sizing names, or 0: not one held to a height of its own, or made taller by what it holds.
+  function ratioOf(e) {
+    if (WHOLE.test(e.localName)) return 0;
+    const cs = getComputedStyle(e), m = /([\d.]+)(?:\s*\/\s*([\d.]+))?\s*$/.exec(cs.aspectRatio);  // ("4 / 5", "auto 4 / 5")
+    if (!m || cs.aspectRatio === "auto") return 0;
+    const r = e.getBoundingClientRect(), inner = cs.boxSizing === "content-box";
+    const sum = (...ps) => ps.reduce((n, p) => n + (parseFloat(cs[p]) || 0), 0);
+    const w = r.width - (inner ? sum("paddingLeft", "paddingRight", "borderLeftWidth", "borderRightWidth") : 0);
+    const h = r.height - (inner ? sum("paddingTop", "paddingBottom", "borderTopWidth", "borderBottomWidth") : 0);
+    return h >= 1 && Math.abs((w * (m[2] || 1)) / m[1] - h) < 1 ? w / h : 0;
+  }
   // A box placed across all of the one it is placed against rather than laid in its flow (a cover's caption over its
   // picture): the room is handed on to it too.
   function across(a, e) {
@@ -1895,13 +1912,14 @@
   function plan(e, out) {
     if (keepers.has(e)) return;
     const kids = kidsOf(e), sealed = !!e.shadowRoot || (!kids.length && e.localName.includes("-") && e.getBoundingClientRect().height >= 1);
-    const past = placedOut(e), over = childrenOf(e).filter((a) => across(a, e));
+    const past = placedOut(e), over = childrenOf(e).filter((a) => across(a, e)), ratio = ratioOf(e);
     const out_ = past.length > 0 && !(holdsPage(e) && past.every(comesIn));  // (see bringIn)
-    // (Nothing laid out or placed in it: a box that only shows its color. One that holds all it shows placed across it,
-    // nothing in its flow, hands the room on to that: Apple's navigation bar, its row of links placed over it.)
-    if (!kids.length && !sealed && !past.length && !over.length) return;
+    // (Nothing laid out or placed in it: a box that only shows its color, as tall as before unless its height follows
+    // its width. One that holds all it shows placed across it, nothing in its flow, hands the room on to that: Apple's
+    // navigation bar, its row of links placed over it.)
+    if (!kids.length && !sealed && !past.length && !over.length && !ratio) return;
     const inside = insideOf(e);
-    if (!sealed && !out_ && !ownMarks(e) && kids.every((c) => fills(c, inside))) {
+    if (!sealed && !out_ && !ratio && !ownMarks(e) && kids.every((c) => fills(c, inside))) {
       out.hand.push(e);
       for (const c of past) out.bring.push([c, e]);
       for (const c of kids) plan(c, out);
@@ -1968,13 +1986,17 @@
   // How a box keeps the room: as a clear border on each side, where it has no border of its own there and paints its
   // color under its border too (most do), so that what it holds and what is placed against it start where they do in
   // Safari's own layout, and the page's scripts read it as wide as it is there (clientWidth: with the room as padding,
-  // Naver's home sized its swiping panels to the whole page); otherwise as padding. A carousel (see rolls) keeps it as
+  // Naver's home sized its swiping panels to the whole page); otherwise as padding. A border of no width is none: a
+  // page styled as Tailwind's gives every box a solid one (kept as padding, OpenAI's pictures had none of their edges
+  // carried on, and what was placed against their boxes went out to the strips). A carousel (see rolls) keeps it as
   // padding: it clips what it holds at its padding, not at its border, so its row of cards runs on under the strips.
+  // And the height to keep a box whose height follows its width at (see ratioOf): as tall as in Safari's own layout.
   function holding(e) {
-    const cs = getComputedStyle(e), roll = rolls(e);
-    const edge = !roll && cs.borderLeftStyle === "none" && cs.borderRightStyle === "none" && cs.borderImageSource === "none" &&
+    const cs = getComputedStyle(e), roll = rolls(e), r = e.getBoundingClientRect(), ratio = ratioOf(e);
+    const bare = (s) => /^(none|hidden)$/.test(cs[`border${s}Style`]) || !(parseFloat(cs[`border${s}Width`]) > 0);
+    const edge = !roll && bare("Left") && bare("Right") && cs.borderImageSource === "none" &&
       cs.backgroundClip.split(",").every((v) => v.trim() === "border-box");
-    return [e, e.getBoundingClientRect(), parseFloat(cs.paddingLeft) || 0, parseFloat(cs.paddingRight) || 0, cs.boxSizing, edge, roll];
+    return [e, r, parseFloat(cs.paddingLeft) || 0, parseFloat(cs.paddingRight) || 0, cs.boxSizing, edge, roll, ratio && r.height - (2 * strip.gap) / ratio];
   }
   // A box that clips what it holds sideways and lays a row of it out past its sides, cards narrower than the middle it
   // would keep (a carousel showing the edge of the next card): kept in the middle inside a clear border, it cut the row
@@ -2017,8 +2039,11 @@
       if (edge) for (const side of ["left", "right"]) { setProp(e, `border-${side}-style`, "solid"); setProp(e, `border-${side}-color`, "transparent"); setProp(e, `border-${side}-width`, `${g}px`); }
       else { setProp(e, "padding-left", `${pl + g}px`); setProp(e, "padding-right", `${pr + g}px`); }
     }
-    const grew = out.hold.filter(([e, b, , , sizing]) => sizing !== "border-box" && Math.abs(e.getBoundingClientRect().width - b.width) > 0.5);
-    for (const [e] of grew) setProp(e, "box-sizing", "border-box");
+    const grew = new Set(out.hold.filter(([e, b, , , sizing]) => sizing !== "border-box" && Math.abs(e.getBoundingClientRect().width - b.width) > 0.5).map(([e]) => e));
+    for (const e of grew) setProp(e, "box-sizing", "border-box");
+    // (A box whose height follows its width by its border box, as wide as it was, is made as tall as in Safari's own
+    // layout. By its content box, that is as wide as there again, and so is its height.)
+    for (const [e, b, , , sizing, , , tall] of out.hold) if (tall >= 1 && (sizing === "border-box" || grew.has(e))) setProp(e, "aspect-ratio", `${+b.width.toFixed(2)} / ${+tall.toFixed(2)}`);
     const failed = [];
     for (const [e, b, , , , edge] of out.hold) {
       const a = e.getBoundingClientRect();
