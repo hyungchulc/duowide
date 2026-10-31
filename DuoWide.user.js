@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DuoWide
 // @namespace    https://github.com/hyungchulc/duowide
-// @version      2.0.2
+// @version      2.0.3
 // @description  Lets web pages use the whole iPhone Duo outer screen in Safari, under the side strip, and keeps what you tap clear of the strip.
 // @author       hyungchulc
 // @homepageURL  https://github.com/hyungchulc/duowide
@@ -63,6 +63,7 @@
   // ---------- where Safari's strip is ----------
 
   let stripPhone = false;  // this phone has shown the strip upright, so a landscape gap is the strip too (not a notch)
+  let pageZoom = 1;        // Safari's page zoom, as last read in a window across a whole screen (see heldStill)
 
   // Safari's page zoom (aA in the address bar, or Settings > Apps > Safari > Page Zoom: 50% to 300%) lays a page out in
   // that many fewer or more CSS pixels and shows it scaled by as much, so the page's lengths are no longer points: at
@@ -128,6 +129,7 @@
     const type = (screen.orientation && screen.orientation.type) || "";
     const o = innerWidth > innerHeight ? "landscape" : "portrait";
     if (!type.startsWith(o)) return o === "portrait" && CONFIG.split ? beside() : null;  // a window beside another app on an unfolded screen
+    pageZoom = scales().view;  // (across a whole screen, Safari's scale is its page zoom alone: see heldStill)
     if (o === "landscape" && !CONFIG.landscape) return null;  // turned sideways: Safari's own layout unless asked for
     const side = type === "portrait-primary" || type === "landscape-secondary" ? "right" : type === "landscape-primary" ? "left" : null;
     // A strip on the left hides where lines begin, and keeping them clear of it would push the whole page back over:
@@ -273,13 +275,16 @@
   // Safari lays out at one scale and a moment later at its own (1 for up to 0.7 seconds, then 0.77): measured at the
   // first, the page would be widened for a window that isn't there and kept at that scale. So the page is widened there
   // once what Safari shows across has held still a while since the window came (a page as it first comes goes by what
-  // it finds), and if Safari's scale changes after all, with no finger zooming, it starts again (see watch). The first
-  // scale is the page unscaled: once Safari shows the window scaled down, it has laid it out as it will, and a short
-  // stillness will do (the colors came under the strips 1.4 to 2.1 seconds after unfolding, waiting at least 1.2), as
-  // long as the window's own move would take to show a change: 0.15 seconds, asked again as soon as that is due. (Moved
-  // there from the full screen, Apple's page was widened half a second after the window had come to rest, 0.3 then,
-  // asked every 0.1.) Safari's numbers may settle after the window's last resize: they are asked again as the part shown
-  // changes (see watch).
+  // it finds), and if Safari's scale changes after all, with no finger zooming, it is fitted to it again (see watch). The
+  // first scale is the page at Safari's page zoom alone (unscaled at 100%, 0.85 at 85%): once Safari shows the window
+  // scaled down from that (0.77 of it), it has laid it out as it will, and a short stillness will do (the colors came
+  // under the strips 1.4 to 2.1 seconds after unfolding, waiting at least 1.2), as long as the window's own move would
+  // take to show a change: 0.15 seconds, asked again as soon as that is due. (Moved there from the full screen, Apple's
+  // page was widened half a second after the window had come to rest, 0.3 then, asked every 0.1.) The zoom is the scale
+  // last read in a window across a whole screen, 100% until one: taken for 100%, a page zoomed to 85% was widened for the
+  // first scale as soon as the window came, and a page that first comes beside another at a zoom under 100% still is,
+  // then fitted again as Safari settles its own. Safari's numbers may settle after the window's last resize: they are
+  // asked again as the part shown changes (see watch).
   const shapeNow = () => { const v = window.visualViewport; return innerWidth + (v ? `@${v.width.toFixed(1)}x${v.scale.toFixed(3)}` : ""); };
   let shapeSeen = "", shapeSince = -Infinity, waitingSince = 0, askedAt = 0, stillTimer = 0;
   function noteShape() {
@@ -292,7 +297,7 @@
     if (shapeSince === -Infinity) return true;
     if (t - askedAt > 500) waitingSince = t;  // (a wait of its own, not the last one asked again)
     askedAt = t;
-    const [still, least] = scales().view < 0.99 ? [150, 0] : [600, 1200];
+    const [still, least] = scales().view < 0.99 * pageZoom ? [150, 0] : [600, 1200];
     if ((t - shapeSince >= still && t - waitingSince >= least) || t - waitingSince > 3000) return true;  // (one that keeps changing is taken as it is)
     clearTimeout(stillTimer);
     stillTimer = setTimeout(consider, Math.min(100, Math.max(16, still - (t - shapeSince), least - (t - waitingSince))));  // (asked again when due)
@@ -1834,9 +1839,34 @@
     const cs = getComputedStyle(e, pe);
     return !/^(none|normal|""|'')$/.test(cs.content) && cs.display !== "none" && !/^(absolute|fixed)$/.test(cs.position);
   });
+  // Where a box is laid out across: getBoundingClientRect has it where it is drawn, moved by its own transform. One
+  // that only slides it along (a carousel's track moved on to its next slide, a panel swiped in) is laid out where it
+  // would be without; one that turns or scales it is taken as drawn, and so is one moved off its place by left or right
+  // as well (a box as wide as the screen, set half the box in and slid back by half its width). (Naver Cafe's grid of
+  // cafés slides a box as wide as the one it is in, which kept the room: swiped, it was taken for a box no longer laid
+  // across that one, the room went up to the box around it, and the grid laid its pages out anew, out of line with the
+  // middle.)
+  function laidAt(e) {
+    const r = e.getBoundingClientRect(), cs = getComputedStyle(e);
+    if (cs.position === "relative" && ((parseFloat(cs.left) || 0) !== 0 || (parseFloat(cs.right) || 0) !== 0)) return r;
+    let x = 0;
+    if (cs.transform !== "none") {
+      const m = new DOMMatrix(cs.transform);
+      x = m.e;
+      m.e = m.f = m.m43 = 0;
+      if (!m.isIdentity) return r;
+    }
+    if (cs.translate && cs.translate !== "none") {
+      const at = lengthPercent(cs.translate.split(/\s+(?![^(]*\))/)[0]);
+      if (!at) return r;
+      x += at[0] * r.width + at[1];
+    }
+    if (!x || (cs.rotate && cs.rotate !== "none") || (cs.scale && cs.scale !== "none")) return r;
+    return { left: r.left - x, right: r.right - x };
+  }
   // Laid across all of where a box lays out what it holds (see insideOf), margins and all.
   function spans(c, inside) {
-    const r = c.getBoundingClientRect(), cs = getComputedStyle(c);
+    const r = laidAt(c), cs = getComputedStyle(c);
     return Math.abs(r.left - (parseFloat(cs.marginLeft) || 0) - inside.left) < 1 && Math.abs(r.right + (parseFloat(cs.marginRight) || 0) - inside.right) < 1;
   }
   // One the room can be handed on to: a box in the flow laid across all of the one it is in, with no width of its own.
@@ -1926,10 +1956,45 @@
   function unplace(e) { if (placed.delete(e)) unsetProps(e, ["background-position-x"]); }
   function unhand(e) { handed.delete(e); unplace(e); sendBack(e); }
 
+  // A box that clips what it holds sideways, holds more than it shows, and holds a box the page's script moves by a
+  // transform (a carousel: its slides laid out in a row on past its sides, their track moved to show one, as carouselOf
+  // tells one) keeps the room itself, as a carousel of cards does (see rolls), rather than hand it on: the script
+  // slides the row by the box's width. Not one holding more of the page than a screen (a page's wrapper). (Naver Cafe's
+  // grid of cafés, swiped a page at a time along a row as wide as its box: handed on, the room left the box as wide as
+  // the screen while the pages were laid out in the middle, and at the last page the row stopped short by the strips'
+  // width, half of each of the last two pages in the middle. Samsung's rows of products slide a box offset a tenth of
+  // its width, its track inside it: taken for laid across the box that clips them (see laidAt), they had the room
+  // handed down to the track, and the script laid the cards out across the whole screen.)
+  function slides(e, kids) {
+    if (!/hidden|clip/.test(getComputedStyle(e).overflowX) || e.scrollWidth <= e.clientWidth + 1 || holdsPage(e)) return false;
+    const moved = (n) => { const cs = getComputedStyle(n); return cs.transform !== "none" || (!!cs.translate && cs.translate !== "none"); };
+    return kids.some((c) => c.nodeType === Node.ELEMENT_NODE && (moved(c) || kidsOf(c).some((n) => n.nodeType === Node.ELEMENT_NODE && moved(n))));
+  }
+
+  // A pager's frame (a box that clips sideways holding one box, its row, which holds a float as wide as the frame: the
+  // first of its panels, floated so that those the page's script lays beside it lie side by side once the script has
+  // made the row as long as all of them) is measured by that script, border and all, and the panels and the row are
+  // sized to it: as the script starts, a moment after the page has loaded, and each time the window resizes (Naver's
+  // home, by getBoundingClientRect, as Swipe does). Handed the room or keeping it, the frame measured as wide as the
+  // whole page, and the panels were laid out across all of it, their words and cards cut off at the middle's end, until
+  // a look a second later sent the room up (see measured) and the page laid them out again: each time the page was
+  // loaded. The box it is in keeps the room instead, from the first look, before the script measures, and the frame is
+  // as wide as in Safari's own layout however it is read. The panel is as wide as the frame as the page lays it out
+  // before the script has sized it, or as in Safari's own layout once it has. (A float as wide as a box that clips it,
+  // with no row between them, is that box's own words, floated: a cookie notice's.)
+  function framesPanels(c) {
+    if (c.nodeType !== Node.ELEMENT_NODE || !/hidden|clip/.test(getComputedStyle(c).overflowX)) return false;
+    const kids = kidsOf(c), inside = insideOf(c), w = inside.right - inside.left;
+    if (kids.length !== 1 || kids[0].nodeType !== Node.ELEMENT_NODE) return false;
+    return kidsOf(kids[0]).some((p) => p.nodeType === Node.ELEMENT_NODE && getComputedStyle(p).float !== "none" &&
+      [w, w - 2 * strip.gap].some((x) => Math.abs(p.getBoundingClientRect().width - x) < 1));
+  }
+
   // Where the room goes from a box laid across all of the one it is in (or <html>), read off the page as it lies, with
   // nothing changed while reading: `out.hand`, boxes it is handed on through, and `out.hold`, those to keep it, with
   // their places and paddings then. A box that draws what it holds where it can't be read (a component's inside) keeps
-  // it. Boxes already keeping it are passed over: what they hold is in the middle.
+  // it, and so does one holding a pager's frame (see framesPanels). Boxes already keeping it are passed over: what they
+  // hold is in the middle.
   function plan(e, out) {
     if (keepers.has(e)) return;
     const kids = kidsOf(e), sealed = !!e.shadowRoot || (!kids.length && e.localName.includes("-") && e.getBoundingClientRect().height >= 1);
@@ -1940,7 +2005,7 @@
     // navigation bar, its row of links placed over it.)
     if (!kids.length && !sealed && !past.length && !over.length && !ratio) return;
     const inside = insideOf(e);
-    if (!sealed && !out_ && !ratio && !ownMarks(e) && kids.every((c) => fills(c, inside))) {
+    if (!sealed && !out_ && !ratio && !ownMarks(e) && kids.every((c) => fills(c, inside)) && !slides(e, kids) && !kids.some(framesPanels)) {
       out.hand.push(e);
       for (const c of past) out.bring.push([c, e]);
       for (const c of kids) plan(c, out);
@@ -2006,12 +2071,13 @@
   function sendBack(e) { for (const [c, b] of [...brought]) if (b === e) { brought.delete(c); unsetProps(c, NUDGES); } }
   // How a box keeps the room: as a clear border on each side, where it has no border of its own there and paints its
   // color under its border too (most do), so that what it holds and what is placed against it start where they do in
-  // Safari's own layout, and the page's scripts read it as wide as it is there (clientWidth: with the room as padding,
-  // Naver's home sized its swiping panels to the whole page); otherwise as padding. A border of no width is none: a
-  // page styled as Tailwind's gives every box a solid one (kept as padding, OpenAI's pictures had none of their edges
-  // carried on, and what was placed against their boxes went out to the strips). A carousel (see rolls) keeps it as
-  // padding: it clips what it holds at its padding, not at its border, so its row of cards runs on under the strips.
-  // And the height to keep a box whose height follows its width at (see ratioOf): as tall as in Safari's own layout.
+  // Safari's own layout, and the page's scripts read it as wide as it is there by clientWidth (one that reads the border
+  // box, as the pager on Naver's home does, is kept from the room altogether: see framesPanels); otherwise as padding.
+  // A border of no width is none: a page styled as Tailwind's gives every box a solid one (kept as padding, OpenAI's
+  // pictures had none of their edges carried on, and what was placed against their boxes went out to the strips). A
+  // carousel (see rolls) keeps it as padding: it clips what it holds at its padding, not at its border, so its row of
+  // cards runs on under the strips. And the height to keep a box whose height follows its width at (see ratioOf): as
+  // tall as in Safari's own layout.
   function holding(e) {
     const cs = getComputedStyle(e), roll = rolls(e), r = e.getBoundingClientRect(), ratio = ratioOf(e);
     const bare = (s) => /^(none|hidden)$/.test(cs[`border${s}Style`]) || !(parseFloat(cs[`border${s}Width`]) > 0);
@@ -2103,8 +2169,12 @@
   // drawn across, row by row. (Samsung's banners and covers are pictures sized to the middle, its sections drawn with
   // them: the strips beside them stayed white, and the page looked laid out no wider than without the script. Play3's
   // front picture, 800×450 covering 500×400, hides 105 on each side: its outermost columns, drawn across the strips, were
-  // not what its edges show, a dark band beside the sky.) Not one the box shows only part of its height, or one with a
-  // border of its own over or under it, which border-image would replace.
+  // not what its edges show, a dark band beside the sky.) The outermost columns are for a picture the page lays words
+  // over, the look of what lies over it (a banner under its headline and buttons, a section's picture under its words).
+  // A picture shown for itself, with no words over it (a post's photo or screenshot, a card's picture), runs on only in
+  // what it hides: drawn across, its outermost columns showed the picture itself stretched on under the strips (a
+  // screenshot in a Naver Cafe post, as wide as the middle, ran on in its dark outermost columns). Not one the box shows
+  // only part of its height, or one with a border of its own over or under it, which border-image would replace.
   const edges = new Map();  // keepers -> the picture whose edges they carry on, and how
   function edgePicture(k) {
     const b = k.getBoundingClientRect(), inside = insideOf(k), cs = getComputedStyle(k);
@@ -2129,6 +2199,27 @@
     const left = Math.min(past, Math.max(0, at[0] * past - at[1]));
     return [left, past - left];
   }
+  // Words the page lays over a picture: in the boxes around it no taller than it (a banner's headline and buttons in a
+  // box laid over its picture), shown or still to fade in, and drawn a few pixels across at least (not words kept for
+  // screen readers alone). A caption under the picture lies past it.
+  function wordsOn(img) {
+    const r = img.getBoundingClientRect();
+    let box = img;
+    for (let e = img.parentElement; e && e !== document.body; e = e.parentElement) {
+      const q = e.getBoundingClientRect();
+      if (q.top < r.top - 1 || q.bottom > r.bottom + 1) break;
+      box = e;
+    }
+    const over = (q) => q.width >= 4 && q.height >= 6 && q.left < r.right - 1 && q.right > r.left + 1 && q.top < r.bottom - 1 && q.bottom > r.top + 1;
+    const range = document.createRange(), walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
+    for (let t = walker.nextNode(); t; t = walker.nextNode()) {
+      const p = t.parentElement;
+      if (!/\S/.test(t.data) || !p || !over(p.getBoundingClientRect()) || (p.checkVisibility && !p.checkVisibility({ visibilityProperty: true }))) continue;
+      range.selectNodeContents(t);
+      if ([...range.getClientRects()].some(over)) return true;
+    }
+    return false;
+  }
   // A picture may fill the box later, or another one (one loading after the look, a banner's next slide): what changes
   // in a box carrying edges or around one, a picture that loads in one, and a transition or animation that ends there
   // (a slide faded or zoomed in) has it looked at again in that frame. Its edges stay while no picture fills it (a
@@ -2138,14 +2229,15 @@
     let src = "", how = "", sides = [];
     if (img) {
       // On each side, from the picture's own side in: what it hides past the box's padding, as a share of it, drawn as
-      // wide as it is drawn and out past the box where that is more than the border; or its outermost column.
+      // wide as it is drawn and out past the box where that is more than the border; or its outermost column, under
+      // words only.
       const cs = getComputedStyle(k), past = hiddenSides(img), drawn = img.getBoundingClientRect().width + past[0] + past[1];
+      const room = ["Left", "Right"].map((s, i) => [parseFloat(cs[`border${s}Width`]) || 0, past[i] - (parseFloat(cs[`padding${s}`]) || 0)]);
+      const alone = room.some(([border, more]) => border > 0 && more < 1) && !wordsOn(img);
       src = img.currentSrc || img.src;
-      sides = ["Left", "Right"].map((s, i) => {
-        const border = parseFloat(cs[`border${s}Width`]) || 0, more = past[i] - (parseFloat(cs[`padding${s}`]) || 0);
-        return more < 1 ? ["1", border, 0] : [`${+((100 * more) / drawn).toFixed(3)}%`, +Math.max(more, border).toFixed(1), +Math.max(0, more - border).toFixed(1)];
-      });
-      how = JSON.stringify([src, sides]);
+      sides = room.map(([border, more]) => (more >= 1 ? [`${+((100 * more) / drawn).toFixed(3)}%`, +Math.max(more, border).toFixed(1), +Math.max(0, more - border).toFixed(1)] :
+        alone ? ["0", 0, 0] : ["1", border, 0]));
+      if (sides.some(([, w]) => w > 0)) how = JSON.stringify([src, sides]);
     }
     if ((edges.get(k) || "") === how || (keep && !how)) return;
     if (!how) { edges.delete(k); unsetProps(k, EDGE_PROPS); return; }
@@ -2326,6 +2418,29 @@
   // Fields show what is typed or picked in them, so all of one belongs in the clear part, not just enough to tap.
   const FIELD = "input:not([type=checkbox],[type=radio],[type=range],[type=color],[type=image],[type=submit],[type=button],[type=reset]),select,textarea";
   const fieldFrames = new WeakSet();  // boxes a page draws a field's frame on, just around it
+  // A picture as small as a button, with no words, in a bar the page keeps on the screen as it scrolls (sticky), is a
+  // button too when nothing in the markup says so: pages make the icons in their bars buttons by script (play3.de's
+  // account button, a span holding a picture at the right end of its sticky header, stayed under the strip on the
+  // folded screen, where it can't be pressed). It goes as the outermost box around the picture that holds nothing else
+  // and is no bigger than a button. Only one reaching past the clear part is looked at; a fixed bar is fitted whole (see
+  // clearBar).
+  const ICON = 48;
+  function iconButtons({ lo, hi }) {
+    const out = new Set();
+    for (const pic of document.querySelectorAll("svg, img")) {
+      const r = pic.getBoundingClientRect();
+      if (r.width < 8 || r.height < 8 || r.width > ICON || r.height > ICON || (r.left >= lo - 0.5 && r.right <= hi + 0.5)) continue;
+      if ((pic.parentElement && pic.parentElement.closest("svg")) || pic.closest(CONTROL)) continue;  // (a drawing's part; a link's or button's)
+      let box = pic;
+      for (let e = pic.parentElement; e && e !== document.body; e = e.parentElement) {
+        const q = e.getBoundingClientRect();
+        if (q.width > ICON || q.height > ICON || /\S/.test(e.innerText) || [...e.querySelectorAll("svg, img")].some((p) => p !== pic && !pic.contains(p))) break;  // (words shown: not a menu it opens)
+        box = e;
+      }
+      for (let e = box; e && e !== document.body; e = e.parentElement) if (getComputedStyle(e).position === "sticky") { out.add(box); break; }
+    }
+    return out;
+  }
 
   let movers = [];          // { el, props }: what the script moved inside, and how
   const insets = new Map(); // block -> its text nodes, given room for good: lines on the left, words around a link, rows for a control
@@ -2347,7 +2462,7 @@
     }
     if (changes) changes.takeRecords();  // its own
   });
-  const ends = new Set();   // carousels given room at their far end
+  const ends = new Map();   // carousels given room at their far end -> { want: [[right?, px]] for where it lay, props }
   let scanY = 0;            // scrollY at the last look, which covered a few screens around it
   let scanTops = new WeakMap();  // the same for a box that scrolls a page of its own (see framesPage): its scrollTop
 
@@ -3164,7 +3279,7 @@
       }
       return false;
     };
-    for (const el of document.querySelectorAll(CONTROL)) {
+    for (const el of [...document.querySelectorAll(CONTROL), ...iconButtons(band)]) {
       // Most are clear of the strip: that is the quickest thing to look at.
       if (!stuckControl(el)) continue;
       // One inside another stuck one moves with it. Inside one that shows (a card that is a link), a button of its own
@@ -3563,18 +3678,35 @@
 
     // A carousel gets room past the strip at its far end, so its last ones can be swiped fully inside, and one that
     // snaps lines things up with the clear part of the screen rather than its edge. One in a bar that now ends before
-    // the strip for good needs none.
+    // the strip for good needs none. The room follows where the carousel lies: given for where it no longer lies, it is
+    // taken back at the next look; and none is given while it lies past the screen's ends (slid away with a panel of the
+    // page, or laid out before the page settled), its ends not where they will be. (Naver's home gave its row of
+    // services room at its start while the row lay past the screen's left end, its panel sliding in, and the row kept a
+    // strip's width of space before its first link.)
     for (const m of pads) if (m.by) unsetProps(m.el, Object.keys(m.props));
+    const away = (b) => b.left < min - 0.5 || b.right > max + 0.5;
+    // (Beside another window, at either end that lies under a strip.)
+    const endsOf = (b) => (both ? [true, false] : [right]).map((R) => [R, Math.min(strip.gap, R ? b.right - hi : lo - b.left)]).filter(([, px]) => px >= 1);
+    for (const [c, { want, props }] of [...ends]) {
+      if (!c.isConnected) { ends.delete(c); continue; }
+      const b = c.getBoundingClientRect(), now = endsOf(b);
+      if (framed(c) || away(b) || (now.length === want.length && now.every(([R, px], i) => want[i][0] === R && Math.abs(want[i][1] - px) < 1))) continue;
+      unsetProps(c, props);
+      ends.delete(c);
+    }
     for (const c of carousels) {
       if (ends.has(c) || insets.has(c)) continue;  // (room it was given for good lets its last ones in already)
       const b = c.getBoundingClientRect();
-      for (const R of both ? [true, false] : [right]) {  // (beside another window, at either end that lies under a strip)
-        const px = Math.min(strip.gap, R ? b.right - hi : lo - b.left);
-        if (px < 1 || !makeRoom(c, px, true, false, false, false, R ? "right" : "left")) continue;
-        ends.add(c);
+      if (away(b)) continue;
+      const want = endsOf(b), props = [];
+      for (const [R, px] of want) {
+        const made = makeRoom(c, px, true, false, false, false, R ? "right" : "left");
+        if (!made) continue;
         const snap = R ? "scroll-padding-right" : "scroll-padding-left";
         setProp(c, snap, `${(parseFloat(getComputedStyle(c).getPropertyValue(snap)) || 0) + px}px`, "");
+        props.push(...Object.keys(made.props), snap);
       }
+      if (props.length) ends.set(c, { want, props });
     }
 
     // Back to the page's own layout, then in place for good. A group that slides over carries the rows inside it along,
@@ -3852,7 +3984,16 @@
     if (zoomedIn) scaled = true;
     if (window.visualViewport) visualViewport.addEventListener("resize", () => {
       noteShape();
-      if (strip) pin();
+      if (strip) {
+        pin();
+        // Shown at another scale of Safari's own, no pinch: a window beside another that Safari settles after the page
+        // was widened for the scale it showed first (see heldStill), or the page zoom set to another step. Nothing else
+        // may tell of it: WebKit tells the window of a resize as the size it lays the window out for changes (the tag's
+        // width stays), and 100vw that follows the part shown reads no pinch either. In the lab, played so, a page zoomed
+        // to 85% stayed widened for 0.85 once Safari showed it at 0.65, narrower than the window. It is fitted to the
+        // scale it is shown at now.
+        if (!zoomed() && Math.abs(scales().zoom / strip.zoom - 1) > 0.01) consider();
+      }
       // (Not widened yet, it is asked again: Safari may settle the part it shows after the window's last resize, and the
       // page stayed as it was until something else asked, a scroll.)
       else if (orig === null && !zoomed()) consider();
