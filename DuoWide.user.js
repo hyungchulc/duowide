@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DuoWide
 // @namespace    https://github.com/hyungchulc/duowide
-// @version      2.0.3
+// @version      2.0.4
 // @description  Lets web pages use the whole iPhone Duo outer screen in Safari, under the side strip, and keeps what you tap clear of the strip.
 // @author       hyungchulc
 // @homepageURL  https://github.com/hyungchulc/duowide
@@ -2411,8 +2411,12 @@
   // gives up the strip's width, once, so the link comes in with its lines. A strip on the left hides where lines begin,
   // so there every line keeps clear of it, given the room once when first seen (stepping in and out while scrolling
   // would re-wrap it, words jumping between lines). Pictures, backgrounds and bars still run under it.
-  const CONTROL = "a[href],button,input:not([type=hidden]),select,textarea,label,summary,[role=button],[role=link],[role=tab]," +
-    "[role=menuitem],[role=checkbox],[role=switch],[role=option],[onclick],[tabindex]:not([tabindex='-1'])";
+  //
+  // What is pressed as a whole. A box given only a place in the keyboard's order (a tabindex and nothing else) is a
+  // control too, but as a region the keyboard reaches, a map for one: what is in it is pressed on its own.
+  const PRESSED = "a[href],button,input:not([type=hidden]),select,textarea,label,summary,[role=button],[role=link],[role=tab]," +
+    "[role=menuitem],[role=checkbox],[role=switch],[role=option],[onclick]";
+  const CONTROL = `${PRESSED},[tabindex]:not([tabindex='-1'])`;
   // What acts on the page where it is, rather than going somewhere.
   const ACTS = "button,input:not([type=hidden]),select,textarea,summary,[role=button],[role=checkbox],[role=switch],[role=tab],[role=menuitem],[role=option]";
   // Fields show what is typed or picked in them, so all of one belongs in the clear part, not just enough to tap.
@@ -3284,9 +3288,11 @@
       if (!stuckControl(el)) continue;
       // One inside another stuck one moves with it. Inside one that shows (a card that is a link), a button of its own
       // on its edge (a "more" over its clamped lines, a bookmark) is pressed on its own; a link in it (a list row's
-      // nickname) stays with it, as the small words at the end of a row do.
+      // nickname) stays with it, as the small words at the end of a row do. In a region the keyboard reaches (see
+      // PRESSED), a link is pressed on its own too: OpenStreetMap's map buttons, links in its map, stayed under the strip
+      // on the folded screen, all but the one that said it was a button.
       const outer = el.parentElement && el.parentElement.closest(CONTROL);
-      if (outer && (stuckControl(outer) || !el.matches(ACTS))) { trace(el, "inside", outer); continue; }
+      if (outer && (stuckControl(outer) || (!el.matches(ACTS) && el.parentElement.closest(PRESSED)))) { trace(el, "inside", outer); continue; }
       if (inText(el) || inFixed(el, boxes) || !visible(el)) {
         trace(el, inText(el) ? "in text" : inFixed(el, boxes) ? "in a fixed box" : "hidden");
         // A link in a sentence comes in with its lines: on the right, the words around it are given room after all.
