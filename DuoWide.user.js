@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DuoWide
 // @namespace    https://github.com/hyungchulc/duowide
-// @version      2.0.5
+// @version      2.0.6
 // @description  Lets web pages use the whole iPhone Duo outer screen in Safari, under the side strip, and keeps what you tap clear of the strip.
 // @author       hyungchulc
 // @homepageURL  https://github.com/hyungchulc/duowide
@@ -941,6 +941,8 @@
       if ("touch-action" in (fixed.get(root) || {})) unsetProps(root, ["touch-action"]);
       for (const el of holds) unsetProps(el, ["touch-action"]);
       holds.clear();
+      for (const el of contained) unsetProps(el, ["overscroll-behavior-x"]);
+      contained.clear();
       holdFrames(false);
       ownBar(false);
       if (wide && !zoomed() && !aside()) line();
@@ -1229,20 +1231,37 @@
   // not it has anything to scroll: the page's setting above doesn't reach a touch that lands in one, and a sideways
   // drag there slides the whole page by the strip's width, its scroll bar showing along the bottom (a wiki's tables,
   // each in a box of its own). One that can't scroll sideways itself gets the page's setting too, and still scrolls up
-  // and down; one that can keeps its own, and loses ours once it can. A few screens around this one, as a look does.
+  // and down; one that can keeps its own, and loses ours once it can. One that can hands a drag past its end on to the
+  // page (WebKit has a box pass on what it can't scroll while its overscroll-behavior is auto), which slid it just the
+  // same: it keeps that to itself (contain), and hands it on again once it can't. (Not the body, whose scrolling may be
+  // the page's own.) A few screens around this one, as a look does, and as the page scrolls on, those it goes toward
+  // (see holdSoon).
   const holds = new Set();  // boxes given the page's touch-action
+  const contained = new Set();  // boxes that scroll sideways, kept from handing a drag on
   let flat = new WeakSet();  // boxes seen not to scroll by themselves: not looked at again
   const sideways = (el, cs) => /auto|scroll/.test(cs.overflowX) && el.scrollWidth > el.clientWidth + 1;
-  function holdBoxes() {
+  let holdY = 0;  // scrollY as the boxes around it were last held
+  function holdBoxes(span = [-1, 3]) {
+    holdY = scrollY;
     for (const el of holds) {
       if (el.isConnected && !sideways(el, getComputedStyle(el))) continue;
       unsetProps(el, ["touch-action"]);
       holds.delete(el);
     }
+    for (const el of contained) {
+      if (el.isConnected && sideways(el, getComputedStyle(el))) continue;
+      unsetProps(el, ["overscroll-behavior-x"]);
+      contained.delete(el);
+    }
     if (!document.body || wide || zoomed()) return;
     holdFrames(true);
     const holdIf = (el, cs) => {
-      if (!/auto|scroll/.test(cs.overflowX + cs.overflowY) || sideways(el, cs) || !/^(auto|manipulation)$/.test(cs.touchAction)) return;
+      if (!/auto|scroll/.test(cs.overflowX + cs.overflowY)) return;
+      if (sideways(el, cs)) {
+        if (el !== document.body && cs.overscrollBehaviorX === "auto") { setProp(el, "overscroll-behavior-x", "contain"); contained.add(el); }
+        return;
+      }
+      if (!/^(auto|manipulation)$/.test(cs.touchAction)) return;
       setProp(el, "touch-action", HOLD);  // (over a sheet that puts every part of a notice back to auto, important and all)
       holds.add(el);
     };
@@ -1257,18 +1276,33 @@
         // (Nothing of a part the page hides shows to be touched: a wiki's folded sections and its notes, thousands of
         // parts, passed over whole. A box that only hands its parts on, laid out as they are, isn't one.)
         if (!r.width && !r.height) return getComputedStyle(el).display === "none" ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
-        if (r.width && r.height && (r.bottom < -windowHeight() || r.top > 3 * windowHeight())) return NodeFilter.FILTER_REJECT;
+        if (r.width && r.height && (r.bottom < span[0] * windowHeight() || r.top > span[1] * windowHeight())) return NodeFilter.FILTER_REJECT;
         return NodeFilter.FILTER_ACCEPT;
       },
     });
     for (let el = walker.nextNode(); el; el = walker.nextNode()) {
-      if (holds.has(el) || flat.has(el)) continue;
+      if (holds.has(el) || contained.has(el) || flat.has(el)) continue;
       // (Words and links laid in lines have no box of their own to scroll: most of a page, passed over unread.)
       if (!el.clientHeight || !el.clientWidth) continue;
       const cs = getComputedStyle(el);
       if (!/auto|scroll/.test(cs.overflowX + cs.overflowY)) { flat.add(el); continue; }
       holdIf(el, cs);
     }
+  }
+
+  // A page scrolled on past the screens the last look held, without stopping, came to boxes still left as they were:
+  // a finger that came down on one there to scroll on slid the page sideways (his GitHub page's table, 11-02, held only
+  // once the page had been still a moment). As the page goes, every couple of screens the boxes a few screens toward
+  // where it is going are held, in the next frame: a touch-action moves nothing that shows.
+  let holdFrame = 0;
+  function holdSoon(down) {
+    if (holdFrame) return;
+    holdFrame = requestAnimationFrame(() => {
+      holdFrame = 0;
+      if (!strip || !document.body || passing()) return;
+      holdBoxes(down ? [-1, 4] : [-4, 1]);
+      if (changes) changes.takeRecords();  // its own restyling
+    });
   }
 
   // A touch that lands in a frame laid in from elsewhere (an ad, an embedded video) goes by that frame's own page's
@@ -1343,6 +1377,7 @@
     movers = [];
     bars.clear();
     holds.clear();
+    contained.clear();
     holdFrames(false);
     flat = new WeakSet();
     insets.clear();
@@ -2639,6 +2674,9 @@
   const ends = new Map();   // carousels given room at their far end -> { want: [[right?, px]] for where it lay, props }
   let scanY = 0;            // scrollY at the last look, which covered a few screens around it
   let scanTops = new WeakMap();  // the same for a box that scrolls a page of its own (see framesPage): its scrollTop
+  let aheadY = 0;           // scrollY as lines were last fitted up to a few screens on, at a look or as it went (see fitAhead)
+  let aheadTops = new WeakMap();  // the same for a box that scrolls a page of its own
+  let holdTops = new WeakMap();   // and its scrollTop as the boxes around were last held (see holdSoon)
 
   // A link inside running text moves with its sentence.
   function inText(el) {
@@ -3235,10 +3273,11 @@
   }
 
   // How a look measures things against the strip.
-  function reach({ lo, hi, min, max }) {
+  function reach({ lo, hi, min, max }, span = [-3 * windowHeight(), 6 * windowHeight()]) {
     const right = strip.side === "right", both = strip.side === "both";
-    // A few screens around this one, more of them ahead, so things are in place before they scroll into view.
-    const near = (r) => r.bottom > -3 * windowHeight() && r.top < 6 * windowHeight();
+    // A few screens around this one, more of them ahead, so things are in place before they scroll into view (or the
+    // `span` of them a page on its way down fits as it goes, see fitAhead).
+    const near = (r) => r.bottom > span[0] && r.top < span[1];
     const onScreen = (r) => r.width >= 1 && r.height >= 1 && r.right > min && r.left < max && near(r);
     const hidden = (l, r) => (both ? r > hi + 1 || l < lo - 1 : right ? r > hi + 1 : l < lo - 1);
     // How far a box gives way to clear the strip: what it keeps from the screen's edge (up to 16px) it keeps from the
@@ -3267,9 +3306,11 @@
   // held on one line, which room would only cut shorter, and a box that would squeeze its pictures. With
   // DuoWide-WideText on, the reader would rather have more words on a line: those on the right run on under the strip
   // as pictures do, all but the ones around a link of theirs that it covers, which come in for the link to be pressed.
-  // Returns the blocks of words it found, on one line and on several, and how it gives one room.
-  function fitLines(band, usable) {
-    const { lo, hi } = band, { right, both, onScreen, hidden, need, covered } = reach(band);
+  // Returns the blocks of words it found, on one line and on several, and how it gives one room. With `below` (a height
+  // in the window), only the blocks that start that far down or further, up to the screens a look covers ahead, so
+  // that nothing that shows changes (see fitAhead).
+  function fitLines(band, usable, below = null) {
+    const { lo, hi } = band, { right, both, onScreen, hidden, need, covered } = reach(band, below === null ? undefined : [below, 6 * windowHeight()]);
     const { single, multi, long } = lineBlocks(hidden, onScreen);
     const wide = right && wideText();
     let lasting = new Map([...multi, ...single]);
@@ -3305,7 +3346,7 @@
       lasting = new Map([...lasting].sort((a, b) => depth(a[0]) - depth(b[0])));
     }
     const giveRoom = (block, nodes, link) => {
-      if (!usable(block)) return;
+      if (!usable(block) || (below !== null && block.getBoundingClientRect().top < below)) return;
       const b = block.getBoundingClientRect(), was = textBox(nodes, block), held = heldText(block);
       const px = need(b);
       // Words held to a few lines end before the strip as a narrower box: a page places the "more" laid over their
@@ -3326,7 +3367,9 @@
       insets.set(block, nodes);
       if ("box-shadow" in room.props) { shades.set(block, { gap: room.gap ?? px, h: block.getBoundingClientRect().height }); shadeSizes.observe(block); }
     };
-    const anchor = lasting.size ? anchorNow() : null;
+    // (Below what shows, nothing that shows moves: the page is not scrolled under a moving finger or a glide, which
+    // Safari would stop.)
+    const anchor = lasting.size && below === null ? anchorNow() : null;
     for (const [block, nodes] of lasting) giveRoom(block, nodes, wide);
     keepAnchor(anchor);
     return { single, multi, giveRoom };
@@ -3337,8 +3380,10 @@
     const trace = dbg && dbg.trace ? (el, ...why) => dbg.trace.push([el, ...why]) : () => {};  // tests: why something stayed
     for (const m of movers) unsetProps(m.el, Object.keys(m.props));
     movers = [];
-    scanY = scrollY;
+    scanY = aheadY = scrollY;
     scanTops = new WeakMap();
+    aheadTops = new WeakMap();
+    holdTops = new WeakMap();
     // A field shows all of itself, its frame as well where the page draws that on a box just around it rather than on the
     // field (a border round a sign-in form's field): that box comes inside whole.
     const frameOf = (el) => {
@@ -3915,10 +3960,40 @@
     }, ms);
   }
 
+  // Words fitted outside a look: not those in a bar (fitted with it at the look; a fixed box that is the page itself is
+  // the page), in a carousel or hidden.
+  const wordsIn = (el) => {
+    for (let e = el; e && e !== document.body; e = e.parentElement) if (!pages.has(e) && getComputedStyle(e).position === "fixed") return false;
+    return !carouselOf(el) && !(el.checkVisibility && !el.checkVisibility({ visibilityProperty: true }));
+  };
+  // A finger on the page, or the page still gliding.
+  const moving = () => touching || performance.now() - lastScroll < 250;
+  // How far down the window what shows ends, and a little more: Safari's bars, laid over the page, may grow back or
+  // shrink away as it scrolls.
+  const belowShown = () => Math.max(windowHeight(), window.visualViewport ? visualViewport.offsetTop + visualViewport.height : 0) + windowHeight() / 4;
+
+  // A page scrolled on past the screens the last look covered brought its words up under the strip, and they came in
+  // only once it stopped: a long glide down an article, its paragraphs running past the strip for seconds (his GitHub
+  // page, 11-02). Going down, the lines a few screens on are fitted as it goes, a couple of screens at a time, all of
+  // them below what shows, so nothing that shows changes while the page moves. Going up is left to the look: room given
+  // above what shows would push it down.
+  let aheadFrame = 0;
+  function fitAhead() {
+    if (aheadFrame) return;
+    aheadFrame = requestAnimationFrame(() => {
+      aheadFrame = 0;
+      if (!strip || !document.body || passing()) return;
+      frozen = new Map();
+      try { fitLines(clearBand(), wordsIn, belowShown()); } finally { thaw(); }
+      if (changes) changes.takeRecords();  // its own restyling
+    });
+  }
+
   // Words that come in run under the strip until that look, and would be seen to re-wrap once it comes (an article
   // shown wide for a moment, then fitted): the lines among them that are read from line to line get their room in the
   // frame they come in, before Safari draws them. Only the words; the rest waits for the look. Only when something that
-  // came in reaches under the strip near the screen: a ticker clear of it costs nothing.
+  // came in reaches under the strip near the screen: a ticker clear of it costs nothing. While the page moves, only
+  // those below what shows, up to the screens it fits ahead (see fitAhead): a feed's next posts come in as it scrolls.
   // Beside another window, what came in or changed takes its place in the middle in that frame first, scrolling or not
   // (a feed's next posts come in as it scrolls), see frameIn.
   let linesFrame = 0;
@@ -3940,21 +4015,18 @@
         try { frameIn(came, moved); edgesIn([...came, ...moved]); } finally { thaw(); }
         if (changes) changes.takeRecords();  // its own restyling
       }
-      if (!came.length || touching || performance.now() - lastScroll < 250) return;
-      const band = clearBand();
+      if (!came.length) return;
+      const band = clearBand(), below = moving() ? belowShown() : null;
       const reaches = (n) => {
         const e = n.nodeType === Node.ELEMENT_NODE ? n : n.parentElement;
         if (!e || !e.isConnected) return false;
         const r = e.getBoundingClientRect();
         const past = strip.side === "both" ? r.right > band.hi + 1 || r.left < band.lo - 1 : strip.side === "right" ? r.right > band.hi + 1 : r.left < band.lo - 1;
-        return past && r.bottom > -windowHeight() && r.top < 2 * windowHeight();
+        return past && (below === null ? r.bottom > -windowHeight() && r.top < 2 * windowHeight() : r.bottom > below && r.top < 6 * windowHeight());
       };
       if (!came.some(reaches)) return;
-      // (Words in a bar are fitted with it at the look; a fixed box that is the page itself is the page.)
-      const inBar = (el) => { for (let e = el; e && e !== document.body; e = e.parentElement) if (!pages.has(e) && getComputedStyle(e).position === "fixed") return true; return false; };
-      const shows = (el) => !(el.checkVisibility && !el.checkVisibility({ visibilityProperty: true }));
       frozen = new Map();
-      try { fitLines(band, (el) => !inBar(el) && !carouselOf(el) && shows(el)); } finally { thaw(); }
+      try { fitLines(band, wordsIn, below); } finally { thaw(); }
       if (changes) changes.takeRecords();  // its own restyling
     });
   }
@@ -4045,8 +4117,11 @@
         clearTimeout(pinTimer);
         const glide = revealing();
         pinTimer = setTimeout(() => pin(glide), glide ? 300 : 150);
-        // A few screens on, look for the next ones once it stops.
+        // A few screens on, look for the next ones once it stops. Going down, the lines further on are fitted as it goes
+        // (see fitAhead).
         if (Math.abs(scrollY - scanY) > 2 * windowHeight()) refixAllSoon(0);
+        if (scrollY - aheadY > 2 * windowHeight()) { aheadY = scrollY; fitAhead(); }
+        if (Math.abs(scrollY - holdY) > 2 * windowHeight()) { holdSoon(scrollY > holdY); holdY = scrollY; }  // (either way)
         refixSoon(300);
         return;
       }
@@ -4054,6 +4129,10 @@
       if (!(el instanceof Element) || el.scrollHeight <= el.clientHeight + 1 || el.clientHeight < windowHeight() / 2) return;
       if (!scanTops.has(el)) scanTops.set(el, el.scrollTop);
       else if (Math.abs(el.scrollTop - scanTops.get(el)) > 2 * windowHeight()) { scanTops.set(el, el.scrollTop); refixAllSoon(0); }
+      if (!aheadTops.has(el)) aheadTops.set(el, el.scrollTop);
+      else if (el.scrollTop - aheadTops.get(el) > 2 * windowHeight()) { aheadTops.set(el, el.scrollTop); fitAhead(); }
+      if (!holdTops.has(el)) holdTops.set(el, el.scrollTop);
+      else if (Math.abs(el.scrollTop - holdTops.get(el)) > 2 * windowHeight()) { const down = el.scrollTop > holdTops.get(el); holdTops.set(el, el.scrollTop); holdSoon(down); }
       refixSoon(300);
     }, { passive: true, capture: true });  // (a box's own scrolling reaches the window only on the way down)
     // A page that slides itself sideways (chatgpt.com closing its menu) is put in line as soon as it has stopped (see
@@ -4105,11 +4184,16 @@
     // touch-action (see pin) keeps Safari from sliding the page sideways, but a sideways swipe that drifts up or down a
     // little still scrolls the page by that much: a carousel the page slides itself crept the page up or down with
     // every swipe. A swipe on one that starts out sideways moves the page not at all; the carousel keeps getting the
-    // touches. Nothing else is held back: once a touch is, Safari does nothing more with it, so a pinch whose first
-    // finger moved before the second came down zoomed nothing, and a swipe from the page's edge went neither back nor
-    // forward. On a carousel too, left alone: whatever scrolls sideways itself under the finger and still can, fields,
-    // players, a press held before moving (selecting text), two fingers, a page zoomed in or wider than the screen,
-    // and a swipe from either edge of the page.
+    // touches. Nor does touch-action hold everywhere: in a box WebKit starts a touch's touch-action afresh in (see
+    // holdBoxes), given the page's own, a quick sideways drag still slid the page by the strip's width (his GitHub
+    // page's table, 11-02, measured on the phone with test/debug-touch.py: the table, the box round the README and the
+    // page all pan-y pinch-zoom, and the page 72 points sideways 93 ms into a drag that went 21 points across in 11).
+    // There a swipe that starts out plainly sideways, twice as far across as up or down, is held too. Nothing else is
+    // held back: once a touch is, Safari does nothing more with it, so a pinch whose first finger moved before the
+    // second came down zoomed nothing, and a swipe from the page's edge went neither back nor forward. There too, left
+    // alone: whatever scrolls sideways itself under the finger and still can, fields, players, a press held before
+    // moving (selecting text), a swipe while text is selected (its handles), two fingers, a page zoomed in or wider
+    // than the screen, and a swipe from either edge of the page.
     let swipe = null;
     const EDGE = 32;
     const nearEdge = (x) => { const { lo, hi } = clearBand(); return x < lo + pt(EDGE) || x > hi - pt(EDGE); };
@@ -4119,11 +4203,17 @@
       if (n.scrollWidth <= n.clientWidth + 1 || !/auto|scroll/.test(getComputedStyle(n).overflowX)) return false;
       return dx < 0 ? n.scrollLeft < n.scrollWidth - n.clientWidth - 1 : n.scrollLeft > 0;
     });
+    const inScroller = (path) => path.some((n) => {
+      if (!(n instanceof Element) || n === document.documentElement) return false;
+      const cs = getComputedStyle(n);
+      return /auto|scroll/.test(cs.overflowX + cs.overflowY);
+    });
     addEventListener("touchstart", (e) => {
       swipe = null;
       if (!strip || wide || e.touches.length !== 1 || zoomed() || nearEdge(e.touches[0].clientX)) return;
-      if (!(e.target instanceof Element) || !carouselOf(e.target)) return;
-      swipe = { x: e.touches[0].clientX, y: e.touches[0].clientY, at: e.timeStamp, way: "", path: e.composedPath() };
+      if (!(e.target instanceof Element) || getSelection()?.isCollapsed === false) return;
+      const path = e.composedPath(), across = carouselOf(e.target) ? 1 : inScroller(path) ? 2 : 0;
+      if (across) swipe = { x: e.touches[0].clientX, y: e.touches[0].clientY, at: e.timeStamp, way: "", path, across };
     }, { passive: true, capture: true });
     addEventListener("touchmove", (e) => {
       if (!swipe || e.touches.length !== 1) { swipe = null; return; }
@@ -4132,7 +4222,7 @@
         // scroll.)
         const dx = e.touches[0].clientX - swipe.x, dy = e.touches[0].clientY - swipe.y;
         if (Math.max(Math.abs(dx), Math.abs(dy)) < pt(6)) return;
-        swipe.way = Math.abs(dx) > Math.abs(dy) && e.timeStamp - swipe.at < 400 && !sideways(swipe.path, dx) ? "x" : "y";
+        swipe.way = Math.abs(dx) > swipe.across * Math.abs(dy) && e.timeStamp - swipe.at < 400 && !sideways(swipe.path, dx) ? "x" : "y";
       }
       if (swipe.way === "x" && e.cancelable) e.preventDefault();
     }, { passive: false });
