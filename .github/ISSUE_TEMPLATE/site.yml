@@ -14,8 +14,8 @@ body:
     attributes:
       label: What looks wrong / 무엇이 이상한지
       description: >-
-        What you expected and what happens. A screenshot or a screen recording helps a lot. /
-        어떻게 보여야 하는데 어떻게 되는지 적어 주세요. 스크린샷이나 화면 녹화가 있으면 큰 도움이 됩니다.
+        What you expected and what happens, in any language. A screenshot or a screen recording helps a lot. /
+        어떻게 보여야 하는데 어떻게 되는지 어떤 언어로든 적어 주세요. 스크린샷이나 화면 녹화가 있으면 큰 도움이 됩니다.
     validations:
       required: true
   - type: input

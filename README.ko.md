@@ -5,7 +5,9 @@
 ⭐ DuoWide가 마음에 드셨다면 이 페이지 위쪽의 **Star**를 눌러 주세요. 다른 아이폰 듀오 사용자들이 DuoWide를 찾는 데 도움이 됩니다.
 [![GitHub stars](https://img.shields.io/github/stars/hyungchulc/duowide?style=social)](https://github.com/hyungchulc/duowide/stargazers)
 
-[English](README.md) · [다운로드](https://github.com/hyungchulc/duowide/releases/latest/download/DuoWide.zip) · [사이트 요청](https://github.com/hyungchulc/duowide/issues/new/choose)
+[English](README.md) · **한국어** · [日本語](README.ja.md) · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md) · [Español](README.es.md) · [Português](README.pt-BR.md) · [Français](README.fr.md) · [Deutsch](README.de.md)
+
+[다운로드](https://github.com/hyungchulc/duowide/releases/latest/download/DuoWide.zip) · [사이트 요청](https://github.com/hyungchulc/duowide/issues/new/choose)
 
 <div align="center">
   <img src="media/demo.webp" width="360" alt="아이폰 듀오 바깥 화면의 Safari에서 DuoWide를 켠 apple.com, Netflix, Notion, Figma, The Verge. 페이지가 오른쪽 유리 줄 밑까지 이어집니다.">
@@ -60,8 +62,9 @@ https://github.com/user-attachments/assets/64fab1b0-b13f-4736-ae52-480a993d2d6b
    - 이미 Userscripts를 쓰고 있다면 폴더는 그대로 두고, 두 스크립트를 지금 쓰는 폴더에 넣습니다.
 4. **설정 → 앱 → Safari → 확장 프로그램 → Userscripts**에서 확장 프로그램을 켜고, **모든 웹사이트**를 **허용**으로
    둡니다.
-5. 권장: **설정 → 앱 → Safari**에서 **상위 히트 미리 로드**를 끕니다. 주소를 치는 동안 Safari가 첫 결과를 미리 불러
-   두는데, 확장 프로그램은 그렇게 미리 불러 둔 페이지에서 돌지 못해서 그 페이지는 새로고침하기 전까지 넓어지지 않습니다.
+5. 권장: **설정 → 앱 → Safari**에서 **많이 방문한 사이트 미리 로드**를 끕니다. 주소를 치는 동안 Safari가 첫 결과를
+   미리 불러 두는데, 확장 프로그램은 그렇게 미리 불러 둔 페이지에서 돌지 못해서 그 페이지는 새로고침하기 전까지 넓어지지
+   않습니다.
 6. 바깥 화면의 Safari에서 페이지를 열거나 새로고침합니다.
 
 **Safari에서 바로 설치할 수도 있습니다.** 확장 프로그램을 켠 뒤

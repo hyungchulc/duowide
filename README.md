@@ -5,7 +5,9 @@
 ⭐ If you like DuoWide, please give it a **Star** at the top of this page. It helps other iPhone Duo users find it.
 [![GitHub stars](https://img.shields.io/github/stars/hyungchulc/duowide?style=social)](https://github.com/hyungchulc/duowide/stargazers)
 
-[한국어](README.ko.md) · [Download](https://github.com/hyungchulc/duowide/releases/latest/download/DuoWide.zip) · [Request a site](https://github.com/hyungchulc/duowide/issues/new/choose)
+**English** · [한국어](README.ko.md) · [日本語](README.ja.md) · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md) · [Español](README.es.md) · [Português](README.pt-BR.md) · [Français](README.fr.md) · [Deutsch](README.de.md)
+
+[Download](https://github.com/hyungchulc/duowide/releases/latest/download/DuoWide.zip) · [Request a site](https://github.com/hyungchulc/duowide/issues/new/choose)
 
 <div align="center">
   <img src="media/demo.webp" width="360" alt="DuoWide in Safari on the iPhone Duo outer screen: apple.com, Netflix, Notion, Figma and The Verge laid out under the side strip">
