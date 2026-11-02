@@ -54,6 +54,7 @@ dessous.
 - Dans Split View sur l’écran interne (Safari à côté d’une autre app), les couleurs et arrière-plans de la page se
   prolongent aussi sous la bande de Safari, sur le bord de la fenêtre, tandis que le texte, les images et les boutons
   restent à l’écart de celle-ci. Pour garder la mise en page de Safari dans Split View, réglez `split` sur `false`.
+  <br><img src="media/split.webp" width="560" alt="DuoWide dans Split View sur l’écran interne de l’iPhone Duo : Netflix et apple.com côte à côte, les couleurs et arrière-plans de chaque page prolongés sous la bande de sa fenêtre">
 - Sur les autres iPhone, sur iPad, sur Mac, ainsi que sur l’écran interne de l’iPhone Duo quand Safari l’occupe en
   entier, DuoWide ne change rien.
 

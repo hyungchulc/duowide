@@ -33,6 +33,7 @@ https://github.com/user-attachments/assets/64fab1b0-b13f-4736-ae52-480a993d2d6b
 - 按鈕無法移動的影片播放器（從其他網站嵌入的播放器、使用 Safari 內建控制項目的影片），在你點一下或播放之前，會像圖片一樣延伸到按鈕條底下；之後就會改成在按鈕條前結束，讓全螢幕和音量按鈕都點得到。
 - 網頁不會左右滑動，雙指縮放和從邊緣滑動回上一頁、到下一頁也都照常可用。DuoWide 會自己畫出網頁的捲軸，所以底部不會出現 iOS 的水平捲軸。
 - 在打開後的內螢幕上使用「分割顯示」（Safari 和另一個 App 並排）時，網頁的顏色和背景也會延伸到視窗側邊的 Safari 按鈕條底下，文字、圖片和按鈕則會避開它。如果想讓「分割顯示」維持 Safari 原本的排版，就把 `split` 設為 `false`。
+  <br><img src="media/split.webp" width="560" alt="在打開後的 iPhone Duo 內螢幕上以「分割顯示」使用 DuoWide：Netflix 和 apple.com 並排顯示，兩個視窗的網頁顏色和背景都延伸到外側的 Safari 按鈕條底下">
 - 在其他 iPhone、iPad、Mac 上，以及 Safari 佔滿整個 iPhone Duo 內螢幕時，DuoWide 不會改變任何東西。
 
 ## 安裝

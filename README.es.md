@@ -52,6 +52,7 @@ las páginas por toda la pantalla, también bajo la franja, y se asegura de que 
 - En Split View en la pantalla desplegada (Safari junto a otra app), los colores y fondos de la página también
   continúan bajo la franja que Safari pone en el lateral de la ventana, mientras que el texto, las imágenes y los
   botones quedan fuera de ella. Para dejar Split View tal como lo muestra Safari, pon `split` en `false`.
+  <br><img src="media/split.webp" width="560" alt="DuoWide en Split View en la pantalla desplegada del iPhone Duo: Netflix y apple.com uno junto al otro, con los colores y fondos de cada página bajo la franja de su ventana">
 - En otros iPhone, iPad y Mac, y en la pantalla desplegada del iPhone Duo cuando Safari la ocupa entera, no cambia
   nada.
 

@@ -33,6 +33,7 @@ https://github.com/user-attachments/assets/64fab1b0-b13f-4736-ae52-480a993d2d6b
 - 按钮无法移动的视频播放器（从其他网站嵌入的播放器、使用 Safari 自带控件的视频）在你轻点或播放之前，会像图片一样延伸到按钮条下面；轻点或播放之后，它们会缩到按钮条前为止，让全屏和音量按钮仍然点得到。
 - 页面不会左右滑动。双指缩放和从屏幕边缘轻扫来后退、前进的手势照常可用。DuoWide 会自己绘制页面的滚动条，所以底部不会出现 iOS 的横向滚动条。
 - 在展开后的内屏上分屏浏览时（Safari 与另一个 App 并排），页面的颜色和背景同样会延伸到窗口侧边的 Safari 按钮条下面，而文字、图片和按钮都会避开它。如果想让分屏浏览保持 Safari 原本的排版，把 `split` 设为 `false` 即可。
+  <br><img src="media/split.webp" width="560" alt="在展开后的 iPhone Duo 内屏上分屏浏览时使用 DuoWide：Netflix 和 apple.com 并排显示，两个窗口的页面颜色和背景都延伸到外侧的 Safari 按钮条下面">
 - 在其他 iPhone、iPad、Mac 上，以及 Safari 独占展开后的 iPhone Duo 内屏时，它不做任何改动。
 
 ## 安装

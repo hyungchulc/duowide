@@ -52,6 +52,7 @@ möchtest.
 - In Split View auf dem aufgeklappten Display (Safari neben einer anderen App) laufen die Farben und Hintergründe der
   Seite auch unter dem Streifen von Safari am Fensterrand weiter, während Text, Bilder und Buttons außerhalb des
   Streifens bleiben. Soll Split View so bleiben, wie Safari es darstellt, setze `split` auf `false`.
+  <br><img src="media/split.webp" width="560" alt="DuoWide in Split View auf dem aufgeklappten Display des iPhone Duo: Netflix und apple.com nebeneinander, Farben und Hintergründe jeder Seite laufen unter dem Streifen ihres Fensters weiter">
 - Auf anderen iPhone-Modellen, auf iPad und Mac sowie auf dem aufgeklappten Display des iPhone Duo, wenn Safari es
   allein nutzt, ändert DuoWide nichts.
 

@@ -46,6 +46,7 @@ whole screen, under the strip, and keeps everything you tap clear of it.
 - In split view on the unfolded screen (Safari beside another app), the page's colors and backgrounds run on under
   Safari's strip on the window's side too, while text, pictures and buttons stay clear of it. To leave split view as
   Safari lays it out, set `split` to `false`.
+  <br><img src="media/split.webp" width="560" alt="DuoWide in split view on the unfolded iPhone Duo screen: Netflix and apple.com side by side, their colors and backgrounds running on under each window's strip">
 - On other iPhones, iPad, Mac, and the unfolded iPhone Duo screen when Safari has all of it, it changes nothing.
 
 ## Install

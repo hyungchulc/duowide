@@ -49,6 +49,7 @@ inclusive por baixo da faixa, e não deixa que ela cubra nada em que você preci
 - No Split View com o iPhone Duo aberto (o Safari ao lado de outro app), as cores e os fundos da página também se
   estendem por baixo da faixa do Safari na lateral da janela, enquanto textos, imagens e botões não ficam embaixo dela.
   Para deixar o Split View do jeito que o Safari monta, defina `split` como `false`.
+  <br><img src="media/split.webp" width="560" alt="DuoWide no Split View com o iPhone Duo aberto: Netflix e apple.com lado a lado, com as cores e os fundos de cada página se estendendo por baixo da faixa da sua janela">
 - Em outros iPhones, no iPad, no Mac e no iPhone Duo aberto quando o Safari ocupa a tela toda, ele não muda nada.
 
 ## Instalação

@@ -45,6 +45,7 @@ https://github.com/user-attachments/assets/64fab1b0-b13f-4736-ae52-480a993d2d6b
 - 펼친 화면에서 Safari를 다른 앱과 나란히 띄운 스플릿 뷰에서도, 페이지의 색과 배경을 창 바깥쪽의 Safari 줄 밑까지 이어
   그리고 글, 사진, 버튼은 줄에 가리지 않게 둡니다. 스플릿 뷰를 Safari가 그리는 그대로 두려면 `split`을 `false`로
   바꿉니다.
+  <br><img src="media/split.webp" width="560" alt="펼친 아이폰 듀오 화면의 스플릿 뷰에서 DuoWide를 켠 Netflix와 apple.com. 두 창 모두 페이지의 색과 배경이 바깥쪽 Safari 줄 밑까지 이어집니다.">
 - 다른 iPhone, iPad, Mac, 그리고 펼친 아이폰 듀오 화면을 Safari가 혼자 다 쓸 때는 아무것도 바꾸지 않습니다.
 
 ## 설치
