@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DuoWide
 // @namespace    https://github.com/hyungchulc/duowide
-// @version      2.0.4
+// @version      2.0.5
 // @description  Lets web pages use the whole iPhone Duo outer screen in Safari, under the side strip, and keeps what you tap clear of the strip.
 // @author       hyungchulc
 // @homepageURL  https://github.com/hyungchulc/duowide
@@ -118,6 +118,23 @@
     return i > 0 && shown < STANDINS[i - 1][0] ? STRIP_PT : 0;
   }
 
+  // The window's height as it is without the keyboard. While a field's keyboard (or picker) is up, Safari lets the page
+  // scroll past its foot by as much as the keyboard covers, and WebKit then counts the window only as far down as the
+  // page goes (WKWebView's _createVisibleContentRectUpdate cuts the part it shows to the page's bounds), with no resize
+  // to tell of it: scrolled to the search box under DC's gallery list, the window 580 high read 322, less than its 382
+  // width, and was taken for one partway through turning sideways (see odd). Three quarters of a second later the page
+  // was back at Safari's own width, as he began to type (his recordings, 11-01 and 11-02). So while a keyboard is up
+  // (the part shown a quarter lower than the window: Safari's own too, as for Find on Page) or a field that takes one
+  // has focus, a window that reads lower than it last did at the same width is as high as it was; one that reads
+  // higher (Safari's bars gone) is as it reads. Everything that goes by the window's height reads it here.
+  const fullHeights = new Map();  // the window's width -> its height, as last read but for a keyboard
+  function windowHeight() {
+    const h = innerHeight, was = fullHeights.get(innerWidth);
+    if (h < was && ((window.visualViewport && visualViewport.height < was * 0.75) || takesKeys(deepActive()))) return was;
+    if (h !== was) fullHeights.set(innerWidth, h);
+    return h;
+  }
+
   // Safari reports the part of the page it shows as the visual viewport and the folded screen as screen.width/height,
   // before and after the page is widened. The strip sits on the camera side: right when upright or turned with the
   // camera down, left when turned the other way. Pinched, or on the way back out, the page is left as it is (see
@@ -127,7 +144,7 @@
     if (zoomed()) return null;
     if (dbg && dbg.strip) return { zoom: 1, width: dbg.strip.full, ...dbg.strip };
     const type = (screen.orientation && screen.orientation.type) || "";
-    const o = innerWidth > innerHeight ? "landscape" : "portrait";
+    const o = innerWidth > windowHeight() ? "landscape" : "portrait";
     if (!type.startsWith(o)) return o === "portrait" && CONFIG.split ? beside() : null;  // a window beside another app on an unfolded screen
     pageZoom = scales().view;  // (across a whole screen, Safari's scale is its page zoom alone: see heldStill)
     if (o === "landscape" && !CONFIG.landscape) return null;  // turned sideways: Safari's own layout unless asked for
@@ -144,7 +161,7 @@
     // The tag gives the screen over the scale Safari zooms the view by (a CSS zoom takes the tag's numbers as points),
     // and the visible page's height, which Safari's bars change.
     const width = Math.round(full / view);
-    return { side, gap: gap / zoom, full: (width * view) / zoom, width, zoom, height: innerHeight * tagScale() };
+    return { side, gap: gap / zoom, full: (width * view) / zoom, width, zoom, height: windowHeight() * tagScale() };
   }
 
   // A window beside another on the unfolded screen (Split View) stands upright on a screen turned sideways, and Safari's
@@ -159,7 +176,7 @@
     const gap = hiddenStrip(shown) || outerWidth - shown;
     if (gap < STRIP[0] || gap > STRIP[1]) return null;
     const width = Math.round((shown + 2 * gap) / view);
-    return { side: "both", gap: gap / zoom, full: (width * view) / zoom, width, zoom, height: innerHeight * tagScale() };
+    return { side: "both", gap: gap / zoom, full: (width * view) / zoom, width, zoom, height: windowHeight() * tagScale() };
   }
 
   // ---------- the viewport tag ----------
@@ -233,7 +250,7 @@
     if ((dbg && dbg.strip) || !strip || screenShape() !== shape) return false;
     if (strip.side === "both") return scales().shown > Math.max(screen.width, screen.height) + 1;  // (upright on a screen turned sideways)
     const type = (screen.orientation && screen.orientation.type) || "";
-    const o = innerWidth > innerHeight ? "landscape" : "portrait";
+    const o = innerWidth > windowHeight() ? "landscape" : "portrait";
     const side = o === "landscape" ? Math.max(screen.width, screen.height) : Math.min(screen.width, screen.height);
     return !type.startsWith(o) || scales().shown > side + 1;
   }
@@ -894,8 +911,21 @@
   const HOLD = "pan-y pinch-zoom";
   const clips = (e) => !!e && /hidden|clip/.test(getComputedStyle(e).overflowX);
   const widePage = () => document.documentElement.scrollWidth > strip.full + 8 && !clips(document.documentElement) && !clips(document.body);
-  let wide = false, wideAt = 0, seenX = 0, focusedAt = -Infinity;  // (seenX: where the page last was sideways, see watch)
-  function pin() {
+  let wide = false, wideAt = 0, seenX = 0, focusedAt = -Infinity;  // (seenX: where the page last was sideways, see watch; focusedAt: see revealing)
+  // A field that takes the keyboard (or a picker) is scrolled into view by Safari as that comes up, and centered across
+  // the part it shows (WebKit's _zoomToFocusRect): on the widened page, one right of that part's middle (a search box
+  // after a menu, as under each DC gallery's list) slides the page sideways too, in a quarter of a second. Put back at
+  // once (the page's scroll and the keyboard's resize come as the slide starts), or halfway, the page jerked back: it
+  // is let finish and glides back (see watch). Only a field the reader tapped, or went on to with the keyboard up: one a
+  // page focuses by itself takes no keyboard. (A field tapped is mostly kept from sliding the page at all, see steer:
+  // this is for the rest.)
+  const REVEAL = 1000;
+  const revealing = () => performance.now() - focusedAt < REVEAL;
+  const NO_KEYS = /^(button|submit|reset|checkbox|radio|range|color|file|image|hidden)$/;
+  const takesKeys = (el) => el instanceof HTMLElement && (el.isContentEditable || /^(textarea|select)$/.test(el.localName) || (el.localName === "input" && !NO_KEYS.test(el.type)));
+  const deepActive = () => { let a = document.activeElement; while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement; return a; };
+  const keyboardUp = () => !!window.visualViewport && visualViewport.height < windowHeight() * 0.75;
+  function pin(glide = false) {
     if (!strip) return;
     const root = document.documentElement;
     wide = widePage();
@@ -925,8 +955,132 @@
     // (Under a finger it is put back once the finger lifts. At once: on a page that eases its own scrolling, it would
     // be seen sliding back.)
     const x = pinX();
-    if (Math.abs(scrollX - x) > 0.5 && !touching) scrollTo({ left: x, top: scrollY, behavior: "instant" });
+    if (Math.abs(scrollX - x) > 0.5 && !touching && (glide || !revealing())) scrollTo({ left: x, top: scrollY, behavior: glide ? "smooth" : "instant" });
     seenX = scrollX;
+  }
+
+  // Gliding back still showed the page slide over and back (11-01, DC's gallery search, his recording). Nothing a page
+  // does keeps Safari's scroll to a field from going sideways but asking for none (focus with preventScroll, which
+  // WebKit's _zoomToRevealFocusedElement heeds and nothing else does): it centers the field across the part it shows,
+  // up to the page's edge, however far the page is from it. WebKit hands the field's focus to Safari as the page is
+  // next drawn, asking what the last focus of it asked: the tap's own (its mousedown's) asks for the scroll, and a
+  // focus of the field focused already takes its place until the keyboard is up for it (WebPage::elementDidRefocus).
+  // So a field the reader taps, where Safari would slide the page, is focused again here as the tap's mouseup comes,
+  // asking for no scroll, and again after the page's own handlers of its click; the tap has put the caret where it
+  // landed. (Focused as the finger lifted, before the tap's own focus, the field went to Safari with that one after
+  // all, and the page still slid: his recording, 11-01 23:47.) The scroll up or down Safari would have made is made
+  // here (see reveal). Where Safari would scroll it up or down only, the field is left to Safari, as is one the page
+  // takes the touch or the mousedown for, one in a bar (where scrolling the page doesn't bring it up), one focused
+  // before the tap (the keyboard up for it already), and one the reader goes on to with the keyboard's arrows (see
+  // revealing). (A tap as Safari takes it: a finger on the field, off within half a second, no more than 10 points
+  // from where it came down.)
+  const PICKS = /^(date|datetime-local|month|week|time)$/;
+  const typesIn = (el) => el instanceof HTMLElement && (el.isContentEditable || ((el.localName === "textarea" || (el.localName === "input" && !NO_KEYS.test(el.type) && !PICKS.test(el.type))) && !el.disabled && !el.readOnly));
+  let steered = null;  // { field, at, caret, top }: a field focused so, until the reader leaves it (caret: where in it, see steer)
+  let tapUp = null;    // the tap whose mouseup and click are still to come (see watch)
+  function steer(e) {
+    const t = tapUp, v = window.visualViewport, field = deepActive();
+    if (!t || !v || !e.isTrusted || performance.now() - t.end > 1000 || !typesIn(field) || field === t.was || !(field === t.target || field.contains(t.target))) return;
+    if (steered && steered.field === field) { field.focus({ preventScroll: true }); return; }  // (again, after the page's own)
+    if (!strip || wide || passing() || (dbg && dbg.steer === false)) return;
+    for (let el = field; el && el !== document.documentElement; el = el.parentElement) if (/fixed|sticky/.test(getComputedStyle(el).position)) return;
+    // The caret, as the tap leaves it: where it landed, on its line; at the start of an empty field. Single-line
+    // fields have it the whole line high.
+    const r = field.getBoundingClientRect(), s = getComputedStyle(field), px = (p) => parseFloat(s[p]) || 0;
+    const box = { left: px("borderLeftWidth") + px("paddingLeft"), right: r.width - px("borderRightWidth") - px("paddingRight"), top: px("borderTopWidth") + px("paddingTop"), bottom: r.height - px("borderBottomWidth") - px("paddingBottom") };
+    const empty = field.isContentEditable ? !field.textContent.trim() : !field.value;
+    const line = parseFloat(s.lineHeight) || 1.2 * px("fontSize");
+    const x = empty ? box.left : Math.min(Math.max(t.x - r.left, box.left), box.right);
+    const y = field.localName === "input" ? (box.top + box.bottom) / 2 : empty ? box.top + line / 2 : Math.min(Math.max(t.y - r.top, box.top + line / 2), box.bottom - line / 2);
+    const caret = { left: x, right: x + 1, top: field.localName === "input" ? box.top : y - line / 2, bottom: field.localName === "input" ? box.bottom : y + line / 2 };
+    if (Math.abs(sidewaysTo(r, caret) - v.pageLeft) < 0.5) return;
+    field.focus({ preventScroll: true });
+    steered = { field, at: performance.now(), caret, top: NaN };
+    setTimeout(reveal, keyboardUp() ? 0 : 600);  // (the keyboard up already, or none coming: one on its own)
+  }
+  // Where Safari puts the part it shows, sideways, for a field the keyboard comes up for (WebKit's _zoomToFocusRect,
+  // in the page's terms): its left edge where the field is centered across it, or, for a field wider than it, as near
+  // as it is now with the field's left edge in its left half; the caret 8 points in from either edge; and the part
+  // inside the page. (A rect's place in the page is the rect's plus the page's scroll: WebKit measures rects from where
+  // the page is scrolled to, the corner of the part shown (LocalFrameView::documentToClientOffset), and Chromium from
+  // the part fixed boxes are laid out in, whose corner its scroll is. In WebKit that part is another, which the visual
+  // viewport's offset counts from: see reveal. The part shown is as wide as the screen less the strip, which is what
+  // Safari reports as the visual viewport's width, unpinched.)
+  function sidewaysTo(r, caret) {
+    const v = visualViewport, vw = strip.full - (strip.side === "both" ? 2 : 1) * strip.gap;
+    const x = r.left + scrollX, max = Math.max(0, document.documentElement.scrollWidth - vw);
+    let to = r.width < vw ? x - (vw - r.width) / 2 : Math.min(Math.max(v.pageLeft, x - vw / 2), x);
+    to = Math.min(Math.max(to, x + caret.right + pt(8) - vw), Math.min(max, x + caret.left - pt(8)));
+    return Math.min(Math.max(to, 0), max);
+  }
+  // Safari's scroll up or down to the field, made for one focused so, as the keyboard comes up (the visual viewport's
+  // resize), or at once with it up already: the field centered in what shows above the keyboard, or, taller than that,
+  // as near as it is now with its top in the upper half; the caret 8 points in from either edge; and no further down
+  // than to bring the page's foot to the keyboard (_zoomToFocusRect again). As the keyboard settles at another height
+  // (it may come up in two steps), it is made again, within a second and a half. Safari scrolls past the foot that
+  // far, where a page's own scroll stops at it: the room for it is made (see roomBelow). The page's script scrolling it so,
+  // no scroll bar is drawn (see scrolledBar). The field's place in the page is its rect's plus the page's scroll (see
+  // sidewaysTo). Counted from the part fixed boxes are laid out in, as from the visual viewport's offset, it was put up
+  // to 308 points too high on the phone: with the keyboard up, the part shown moves on down inside that part and pushes
+  // it along only at its foot, so it lags the part shown by as much as the keyboard covers once the page has gone down to
+  // the field. The scroll made again 0.6 seconds after the tap went that far up, the field under the keyboard, and the
+  // page came back half a second later (his recording, 11-02 01:28).
+  function reveal() {
+    const st = steered, v = window.visualViewport;
+    if (!st || !v || !strip || document.activeElement !== st.field || !st.field.isConnected || performance.now() - st.at > 1500) return;
+    const r = st.field.getBoundingClientRect(), vh = v.height;
+    const y = r.top + scrollY, foot = pageFoot();
+    let to = r.height < vh ? y - (vh - r.height) / 2 : Math.min(Math.max(v.pageTop, y - vh / 2), y);
+    to = Math.min(Math.max(to, y + st.caret.bottom + pt(8) - vh), Math.min(foot - vh, y + st.caret.top - pt(8)));
+    to = Math.max(0, to);
+    if (Math.abs(to - v.pageTop) < 1 || Math.abs(to - st.top) < 1) return;
+    st.top = to;
+    roomBelow(to);
+    barUntil = 0;
+    scrollTo({ left: scrollX, top: scrollY + to - v.pageTop, behavior: "smooth" });
+  }
+  // Room below the page's foot while the keyboard is up, for that scroll (see reveal): an empty box from the page's top
+  // down past the foot by as much as it takes, out of sight behind the keyboard and taking no touches. Safari lets the
+  // reader scroll no further either. Once the keyboard is down, the page glides back to its foot, as with Safari's own
+  // (see leaveRoom). While it is in, the page is never laid out shorter: the box is neither taken out for a moment nor
+  // made lower. WebKit scrolls a page no further than its foot as it lays it out, there and then, and leaves it there
+  // once the page is longer again (ScrollView::setContentsSize). Taken out to read the page's own foot, the box left the
+  // page, scrolled past that foot to the field, at the foot: 0.6 seconds after the tap with the scroll made again, the
+  // field under the keyboard until a key typed brought it back, and as the keyboard went down, there at once rather than
+  // gliding (his recording, 11-02 01:50). So the page's own foot is read past the box, and short of it is the one last
+  // read without it.
+  let roomBox = null, bareFoot = 0;
+  function pageFoot() {
+    const h = document.documentElement.scrollHeight;
+    if (!roomBox || h > roomBox.getBoundingClientRect().bottom + scrollY + 0.5) bareFoot = h;
+    return bareFoot;
+  }
+  function roomBelow(to) {
+    const need = to + windowHeight();
+    if (need <= pageFoot() + 0.5) return;
+    if (!roomBox) {
+      roomBox = document.createElement("div");
+      roomBox.setAttribute(MARK, "room");
+      roomBox.style.cssText = "position: absolute !important; top: 0 !important; left: 0 !important; width: 1px !important; margin: 0 !important; padding: 0 !important; border: 0 !important; visibility: hidden !important; pointer-events: none !important;";
+      document.documentElement.appendChild(roomBox);
+    }
+    const h = Math.ceil(need + 1);
+    if (!(parseFloat(roomBox.style.height) >= h)) roomBox.style.setProperty("height", h + "px", "important");
+    if (changes) changes.takeRecords();  // (its own)
+  }
+  function leaveRoom() {
+    if (!roomBox) return;
+    const max = Math.max(0, pageFoot() - windowHeight());
+    if (scrollY > max + 0.5) scrollTo({ left: scrollX, top: max, behavior: "smooth" });
+    let tries = 0;
+    const drop = () => {
+      if (!roomBox || keyboardUp()) return;  // (up again: kept)
+      if (scrollY > max + 1 && ++tries < 12) { setTimeout(drop, 100); return; }
+      roomBox.remove();
+      roomBox = null;
+      if (changes) changes.takeRecords();
+    };
+    drop();
   }
 
   // Safari lays the fixed boxes (bars, sheets, popups) out in a part of the page as wide as the screen, which follows
@@ -1027,8 +1181,8 @@
       barFrame = 0;
       const root = document.documentElement, z = strip ? strip.zoom : 1;  // (worked out in points, as iOS draws it)
       // (Where Safari hides the screen (see hiddenStrip), along the window's height.)
-      const H = screenHidden() ? innerHeight * z : innerWidth > innerHeight ? Math.min(screen.width, screen.height) : Math.max(screen.width, screen.height);
-      const track = H - 2 * TRACK.ends, page = root.scrollHeight * z, seen = innerHeight * z, max = root.scrollHeight - innerHeight;
+      const H = screenHidden() ? windowHeight() * z : innerWidth > windowHeight() ? Math.min(screen.width, screen.height) : Math.max(screen.width, screen.height);
+      const track = H - 2 * TRACK.ends, page = root.scrollHeight * z, seen = windowHeight() * z, max = root.scrollHeight - windowHeight();
       if (!root.hasAttribute(BAR) || max < 1 || track < TRACK.min) return;
       const over = Math.max(0, -scrollY, scrollY - max) * z;  // (pulled past either end, it shortens, as iOS's does)
       const len = Math.max(Math.max(TRACK.min, (track * H) / (page + H - seen)) - over, 2 * TRACK.width);
@@ -1103,7 +1257,7 @@
         // (Nothing of a part the page hides shows to be touched: a wiki's folded sections and its notes, thousands of
         // parts, passed over whole. A box that only hands its parts on, laid out as they are, isn't one.)
         if (!r.width && !r.height) return getComputedStyle(el).display === "none" ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
-        if (r.width && r.height && (r.bottom < -innerHeight || r.top > 3 * innerHeight)) return NodeFilter.FILTER_REJECT;
+        if (r.width && r.height && (r.bottom < -windowHeight() || r.top > 3 * windowHeight())) return NodeFilter.FILTER_REJECT;
         return NodeFilter.FILTER_ACCEPT;
       },
     });
@@ -1503,7 +1657,7 @@
   function stripesOf(box, side = strip.side, bg = paintOf(box)) {
     if (side === "both") return [...stripesOf(box, "left", bg), ...stripesOf(box, "right", bg)];
     const right = side === "right", r = box.getBoundingClientRect(), cs = getComputedStyle(box), rows = [];
-    if (r.height >= innerHeight * 0.8) return rows;
+    if (r.height >= windowHeight() * 0.8) return rows;
     // (A row that reaches the edge sits in boxes that do.)
     const walk = (e, depth) => {
       for (const c of e.children) {
@@ -1605,11 +1759,11 @@
   }
 
   function framesPage(box, r, full) {
-    if (r.width < full * 0.9 || r.height < innerHeight * 0.8 || document.documentElement.scrollHeight > innerHeight * 1.25) return false;
+    if (r.width < full * 0.9 || r.height < windowHeight() * 0.8 || document.documentElement.scrollHeight > windowHeight() * 1.25) return false;
     const scrolls = (e, depth) => {
       const q = e.getBoundingClientRect();
-      if (q.height < innerHeight * 0.5 || q.width < r.width * 0.8) return false;
-      if (/auto|scroll/.test(getComputedStyle(e).overflowY) && e.scrollHeight > e.clientHeight + innerHeight / 2) return true;
+      if (q.height < windowHeight() * 0.5 || q.width < r.width * 0.8) return false;
+      if (/auto|scroll/.test(getComputedStyle(e).overflowY) && e.scrollHeight > e.clientHeight + windowHeight() / 2) return true;
       return depth < 6 && [...e.children].some((c) => scrolls(c, depth + 1));
     };
     return scrolls(box, 0);
@@ -1678,6 +1832,22 @@
       if (changes) changes.takeRecords();  // its own restyling
     });
   }
+  // A bar the page lets go of, no longer fixed, stayed ended at the strip with its paint beside it until the next look,
+  // a second or more later: DC's header, which becomes the top of its search screen as that opens over the results,
+  // held the whole screen inside the part shown, white under the strip beside its gray. Seen let go of in the frame
+  // after, the page is looked over then, at once, unless it is moving (a header the page fixes and lets go of as it
+  // scrolls waits for the look after, as before: let go of first, its buttons would show under the strip till then).
+  let unbarring = 0;
+  function unbarSoon() {
+    if (unbarring || !bars.size) return;
+    unbarring = requestAnimationFrame(() => {
+      unbarring = 0;
+      if (!strip || passing() || touching || performance.now() - lastScroll < 250 || performance.now() - lastFull < 500) return;
+      for (const box of bars) {
+        if (box.isConnected && box.getClientRects().length && getComputedStyle(box).position !== "fixed") { refix(true); return; }
+      }
+    });
+  }
 
   function clearBar(box, band) {
     const { lo, hi, min, max } = band;
@@ -1706,7 +1876,7 @@
       if (framesPage(box, r, max - min)) return true;
       // So is the page itself held still under a sheet or a menu: the box holding all of it fixed where it was scrolled
       // to, taller than the screen. Ended at the strip, the whole page would be laid out again behind the layer.
-      if (r.width >= (max - min) * 0.9 && r.top <= 1 && r.bottom >= innerHeight - 1 && r.height > innerHeight * 1.5) return true;
+      if (r.width >= (max - min) * 0.9 && r.top <= 1 && r.bottom >= windowHeight() - 1 && r.height > windowHeight() * 1.5) return true;
       // Beside another window, one no wider than the middle was placed against an edge of the part shown, as Safari
       // counts it (sized in vw, which counts that part: Reddit's cookie sheet at 0-500): it comes in whole, by the
       // strip's width, rather than cut at the strip. One that covers the middle runs its color on to both ends.
@@ -2055,7 +2225,7 @@
   // white beside a dark page). It hands the room on, and what it places comes in by the strip's width from the side it
   // was on, where it is in Safari's own layout as placed against the box's side there; one wider than the middle can't,
   // and the box keeps the room as a row does. Brought in by translate (see nudge), so that the page's own placing stands.
-  const holdsPage = (e) => e.getBoundingClientRect().height > innerHeight;
+  const holdsPage = (e) => e.getBoundingClientRect().height > windowHeight();
   const comesIn = (c) => { const { lo, hi } = clearBand(); return c.getBoundingClientRect().width <= hi - lo + 0.5; };
   const brought = new Map();  // what a box handed the room places, brought in -> that box
   const NUDGES = ["translate", "margin-left", "margin-right"];
@@ -2490,7 +2660,7 @@
       const cs = getComputedStyle(e);
       if (/auto|scroll/.test(cs.overflowX)) return e;
       // (Not a whole page's wrapper: one taller than most of a screen, measured the same way the phone is held.)
-      if (!/hidden|clip/.test(cs.overflowX) || e.getBoundingClientRect().height >= Math.max(innerWidth, innerHeight) * 0.8) continue;
+      if (!/hidden|clip/.test(cs.overflowX) || e.getBoundingClientRect().height >= Math.max(innerWidth, windowHeight()) * 0.8) continue;
       if (e.scrollLeft > 0 || e.scrollWidth > e.clientWidth * 1.5) return e;
       for (let s = el; s && s !== e; s = up(s)) {
         const ss = getComputedStyle(s);
@@ -3055,7 +3225,7 @@
   // stays at its top, where the reader starts (words fitted before they show would open it scrolled down).
   function anchorNow() {
     if (scrollY < 1) return null;
-    const el = document.elementFromPoint(innerWidth / 2, innerHeight / 3);
+    const el = document.elementFromPoint(innerWidth / 2, windowHeight() / 3);
     return el && el !== document.documentElement && el !== document.body ? { el, top: el.getBoundingClientRect().top } : null;
   }
   function keepAnchor(a) {
@@ -3068,7 +3238,7 @@
   function reach({ lo, hi, min, max }) {
     const right = strip.side === "right", both = strip.side === "both";
     // A few screens around this one, more of them ahead, so things are in place before they scroll into view.
-    const near = (r) => r.bottom > -3 * innerHeight && r.top < 6 * innerHeight;
+    const near = (r) => r.bottom > -3 * windowHeight() && r.top < 6 * windowHeight();
     const onScreen = (r) => r.width >= 1 && r.height >= 1 && r.right > min && r.left < max && near(r);
     const hidden = (l, r) => (both ? r > hi + 1 || l < lo - 1 : right ? r > hi + 1 : l < lo - 1);
     // How far a box gives way to clear the strip: what it keeps from the screen's edge (up to 16px) it keeps from the
@@ -3485,7 +3655,7 @@
     const forGood = (el) => {
       const parts = drawnOn(el), c = el.getBoundingClientRect();
       const level = ([bl]) => { const q = bl.getBoundingClientRect(); return Math.min(q.bottom, c.bottom) - Math.max(q.top, c.top) > 0; };
-      for (const row of rowsOf(el, lo, hi, innerHeight)) {
+      for (const row of rowsOf(el, lo, hi, windowHeight())) {
         if (padded.has(row)) break;
         const b = row.getBoundingClientRect();
         const kept = wrapped(row).filter((k) => !level(k)), seen = marks(row, b.top, b.bottom);
@@ -3777,7 +3947,7 @@
         if (!e || !e.isConnected) return false;
         const r = e.getBoundingClientRect();
         const past = strip.side === "both" ? r.right > band.hi + 1 || r.left < band.lo - 1 : strip.side === "right" ? r.right > band.hi + 1 : r.left < band.lo - 1;
-        return past && r.bottom > -innerHeight && r.top < 2 * innerHeight;
+        return past && r.bottom > -windowHeight() && r.top < 2 * windowHeight();
       };
       if (!came.some(reaches)) return;
       // (Words in a bar are fitted with it at the look; a fixed box that is the page itself is the page.)
@@ -3832,6 +4002,7 @@
       if (strip.side === "both") fitLinesSoon([], records.filter((rec) => rec.type === "attributes").map((rec) => rec.target));  // (a box shown or restyled, see frameIn)
       if (!records.some((rec) => rec.type === "attributes")) return;
       repaintSoon();
+      unbarSoon();
       if (!shown) shown = setTimeout(fitShown, 600);
     });
     changes.observe(document.documentElement || document, { childList: true, subtree: true, attributes: true, attributeOldValue: true });
@@ -3864,23 +4035,25 @@
         // page it has just loaded at its left edge as it first draws it, and a page's script scrolls to its top-left; no
         // finger moves it that far at once. It is put back at once, for the next frame: beside another window, each post
         // Naver Cafe opened showed its middle a strip's width off for 0.18 seconds until then, and so did Samsung's page
-        // as it loaded again. (Not while a field takes the keyboard: Safari scrolls that into view, see focusin.)
+        // as it loaded again. (Not while a field takes the keyboard: Safari scrolls that into view, see revealing.)
         const jumped = Math.abs(scrollX - seenX) >= strip.gap - 1;
         seenX = scrollX;
-        if (jumped && !touching && performance.now() - focusedAt > 800 && Math.abs(scrollX - pinX()) > 0.5 && !passing()) pin();
+        if (jumped && !touching && !revealing() && Math.abs(scrollX - pinX()) > 0.5 && !passing()) pin();
         // (Slid by a finger the page never saw, one that came down on a frame from elsewhere, or still gliding: put
-        // back once it is still, not against the finger, which shook the page from side to side, nor the glide.)
+        // back once it is still, not against the finger, which shook the page from side to side, nor the glide. Slid
+        // to a field taking the keyboard: once Safari's slide is over, gliding back, see revealing.)
         clearTimeout(pinTimer);
-        pinTimer = setTimeout(pin, 150);
+        const glide = revealing();
+        pinTimer = setTimeout(() => pin(glide), glide ? 300 : 150);
         // A few screens on, look for the next ones once it stops.
-        if (Math.abs(scrollY - scanY) > 2 * innerHeight) refixAllSoon(0);
+        if (Math.abs(scrollY - scanY) > 2 * windowHeight()) refixAllSoon(0);
         refixSoon(300);
         return;
       }
       // A box that scrolls a page of its own up and down (see framesPage) brings its next ones the same way.
-      if (!(el instanceof Element) || el.scrollHeight <= el.clientHeight + 1 || el.clientHeight < innerHeight / 2) return;
+      if (!(el instanceof Element) || el.scrollHeight <= el.clientHeight + 1 || el.clientHeight < windowHeight() / 2) return;
       if (!scanTops.has(el)) scanTops.set(el, el.scrollTop);
-      else if (Math.abs(el.scrollTop - scanTops.get(el)) > 2 * innerHeight) { scanTops.set(el, el.scrollTop); refixAllSoon(0); }
+      else if (Math.abs(el.scrollTop - scanTops.get(el)) > 2 * windowHeight()) { scanTops.set(el, el.scrollTop); refixAllSoon(0); }
       refixSoon(300);
     }, { passive: true, capture: true });  // (a box's own scrolling reaches the window only on the way down)
     // A page that slides itself sideways (chatgpt.com closing its menu) is put in line as soon as it has stopped (see
@@ -3990,6 +4163,9 @@
     if (zoomedIn) scaled = true;
     if (window.visualViewport) visualViewport.addEventListener("resize", () => {
       noteShape();
+      // The keyboard coming up for a field focused for a tap, or going down (see steer).
+      if (keyboardUp()) reveal();
+      else leaveRoom();
       if (strip) {
         pin();
         // Shown at another scale of Safari's own, no pinch: a window beside another that Safari settles after the page
@@ -4009,8 +4185,39 @@
       else if (touching || performance.now() - touchedAt < 1500) scaled = true;
       else if (strip && strip.side === "both") { zoomedIn = false; afresh(); }  // (Safari settling a window beside another after all, see heldStill)
     });
-    // Safari slides the page when a field takes the keyboard; put it back once it has.
-    addEventListener("focusin", () => { focusedAt = performance.now(); if (strip) setTimeout(pin, 400); });
+    // Safari slides the page to a field that takes the keyboard (see revealing); it glides back once that is over.
+    addEventListener("focusin", (e) => {
+      if (!strip || !takesKeys(e.target) || !(touching || performance.now() - touchedAt < 1000 || keyboardUp())) return;
+      focusedAt = performance.now();
+      setTimeout(() => pin(true), 700);  // (should no scroll of the page's tell of it)
+    });
+    // A tap on a field, focused again as its mouseup comes where Safari would slide the page to it, and after the
+    // page's own handlers of its click (see steer). Its touches after the page's own listeners: a page that takes the
+    // touch for itself (preventDefault) is left to. So is a finger that came down on a page still scrolling: Safari
+    // only stops it there, and focuses nothing.
+    let tap = null;
+    addEventListener("touchstart", (e) => {
+      const target = e.composedPath()[0];  // (in a page's own shadow tree, the field itself)
+      tap = strip && e.touches.length === 1 && !e.defaultPrevented && performance.now() - lastScroll > 120 ? { x: e.touches[0].clientX, y: e.touches[0].clientY, at: e.timeStamp, target, was: deepActive() } : null;
+    }, { passive: true });
+    addEventListener("touchmove", (e) => {
+      if (tap && (e.touches.length !== 1 || Math.hypot(e.touches[0].clientX - tap.x, e.touches[0].clientY - tap.y) > pt(10))) tap = null;
+    }, { passive: true, capture: true });
+    addEventListener("touchcancel", () => { tap = null; }, { passive: true, capture: true });
+    addEventListener("touchend", (e) => {
+      const t = tap;
+      tap = null;
+      tapUp = t && !e.touches.length && !e.defaultPrevented && e.timeStamp - t.at < 500 ? { ...t, end: performance.now() } : null;
+    }, { passive: true });
+    addEventListener("mouseup", steer, true);
+    addEventListener("click", (e) => { steer(e); tapUp = null; });
+    // Left for something that takes no keyboard, with no resize to tell the keyboard went (one on its own): the room
+    // below the page goes all the same.
+    addEventListener("focusout", (e) => {
+      if (!steered || e.target !== steered.field) return;
+      steered = null;
+      if (!takesKeys(e.relatedTarget)) setTimeout(() => { if (!keyboardUp() && !takesKeys(document.activeElement)) leaveRoom(); }, 700);
+    });
   }
 
   async function start() {
