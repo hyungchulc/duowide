@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DuoWide
 // @namespace    https://github.com/hyungchulc/duowide
-// @version      2.0.6
+// @version      2.0.7
 // @description  Lets web pages use the whole iPhone Duo outer screen in Safari, under the side strip, and keeps what you tap clear of the strip.
 // @author       hyungchulc
 // @homepageURL  https://github.com/hyungchulc/duowide
@@ -63,6 +63,7 @@
   // ---------- where Safari's strip is ----------
 
   let stripPhone = false;  // this phone has shown the strip upright, so a landscape gap is the strip too (not a notch)
+  let stripKept = null;    // whether the store holds that already, once read (see start)
   let pageZoom = 1;        // Safari's page zoom, as last read in a window across a whole screen (see heldStill)
 
   // Safari's page zoom (aA in the address bar, or Settings > Apps > Safari > Page Zoom: 50% to 300%) lays a page out in
@@ -156,7 +157,7 @@
     const full = hidden ? shown + hidden : o === "landscape" ? Math.max(screen.width, screen.height) : Math.min(screen.width, screen.height);
     const gap = full - shown;
     if (gap < STRIP[0] || gap > STRIP[1]) return null;
-    if (o === "portrait" && !stripPhone) { stripPhone = true; store.set("stripPhone", true); }
+    if (o === "portrait" && !stripPhone) { stripPhone = true; stripKept?.then((kept) => { if (!kept) store.set("stripPhone", true); }); }
     if (o === "landscape" && !stripPhone) return null;
     // The tag gives the screen over the scale Safari zooms the view by (a CSS zoom takes the tag's numbers as points),
     // and the visible page's height, which Safari's bars change.
@@ -211,7 +212,9 @@
     if (s.height) m.set("height", String(tagHeight(s.height)));
     m.set("initial-scale", "1");
     m.set("minimum-scale", "1");
-    return [...m].map(([k, v]) => (v ? `${k}=${v}` : k)).join(", ");
+    const out = [...m].map(([k, v]) => (v ? `${k}=${v}` : k)).join(", ");
+    wrote.set(out, content);  // (see theirs)
+    return out;
   }
 
   const viewportTag = () => [...document.querySelectorAll('meta[name="viewport" i]')].filter((t) => t !== own).pop() || null;
@@ -221,6 +224,7 @@
   let meta = null;    // the page's viewport tag
   let orig = null;    // its own content while ours is in place
   let ours = "";      // the content we wrote
+  const wrote = new Map();  // each content of ours -> the page's own content it was written for (see theirs)
   const others = new Map();  // the page's other viewport tags -> their own content, while they carry ours too
   let own = null;     // a viewport tag of ours, read after the page's, while those keep the page's own content
   let strip = null;   // { side, gap, full, width, zoom, height } while the page is widened (see detect; side "both", beside)
@@ -228,6 +232,7 @@
   let yielded = false;
   let shape = "";     // the screen's size when the page was widened
   let scaled = false; // the reader has zoomed the page, so WebKit keeps its scale itself (see sleep)
+  let byReader = false; // the zoom the page shows is the reader's own, a pinch or a double tap (see unzoom)
   let asleep = false; // the page's own viewport is back while it is hidden (see sleep)
 
   // n points in the page's CSS pixels (see scales); TAP, EDGE and the scroll bar's TRACK are in points.
@@ -323,11 +328,33 @@
 
   const sameTag = (a, b) => [...parse(a)].sort().join() === [...parse(b)].sort().join();
 
+  // A page may put in a copy of its head as it was: Turbo (GitHub's) keeps snapshots of the page, our tag in them as it
+  // was, and puts one's head in again going from one tab to the next and coming back. A new tag saying what ours said
+  // was taken for the page's own new content: the page was let go, that tag still saying ours, so it stayed laid out
+  // across the screen with nothing held, and went sideways under a finger (GitHub's insights tabs, his recording,
+  // 11-03). What ours said stands for the page's own content it was written for: a tag saying it is the page's own tag,
+  // and takes ours or gets its own back; a copy of our own tag (see ownTag) goes.
+  const theirs = (c) => (wrote.has(c) ? wrote.get(c) : c);
+  function theirsBack() {
+    for (const t of document.querySelectorAll('meta[name="viewport" i]')) {
+      if (t === own) continue;
+      const c = t.getAttribute("content") || "";
+      if (t.getAttribute(MARK) === "viewport") t.remove();
+      else if (wrote.has(c)) t.setAttribute("content", wrote.get(c));
+    }
+  }
+
   function consider() {
+    for (const t of document.querySelectorAll(`meta[${MARK}="viewport"]`)) if (t !== own) t.remove();  // (a copy, see theirs)
     if (yielded || (asleep && document.visibilityState === "hidden")) return;
-    const tag = viewportTag();
+    let tag = viewportTag();
+    // A page that takes its tag out and puts none in (GitHub's, coming back to a page Turbo kept, see theirs) leaves
+    // Safari going by the last one it read, ours: let go there, the page stayed widened with nothing held. Its tag goes
+    // back in as it was.
+    if (!tag && meta && orig !== null && !meta.isConnected) (document.head || document.documentElement).appendChild((tag = meta));
     if (own) {
       // (see ownTag) The page's tags keep what it writes in them, and ours carries the page's own content widened.
+      theirsBack();
       if ((!own.isConnected || own.getAttribute("content") !== ours) && !rewrote()) return;  // (the page took ours, or wrote on it)
       if (tag !== meta) { meta = tag; if (meta) metaWatch.observe(meta, { attributes: true, attributeFilter: ["content"] }); }
       const content = meta ? meta.getAttribute("content") || "" : "";
@@ -342,9 +369,9 @@
     }
     if (tag !== meta) {
       // A page that renders its head again (a framework taking the page over as it starts) puts in a new tag saying
-      // what the old one said: ours goes on it at once, and what was fitted stays. Taken down and put back, the bars
-      // showed unfitted for a moment (the top of mlb.com flashing, openai.com jolting once loaded).
-      const again = !!(meta && orig !== null && tag && sameTag(tag.getAttribute("content"), orig));
+      // what the old one said (or ours, see theirs): ours goes on it at once, and what was fitted stays. Taken down and
+      // put back, the bars showed unfitted for a moment (the top of mlb.com flashing, openai.com jolting once loaded).
+      const again = !!(meta && orig !== null && tag && sameTag(theirs(tag.getAttribute("content") || ""), orig));
       if (meta && orig !== null && !again) restore();
       if (again && meta.isConnected) others.set(meta, orig);  // (still there: it carries ours, and gets its own back)
       meta = tag;
@@ -352,7 +379,7 @@
       if (again) meta.setAttribute("content", ours);
     }
     if (!meta) return;
-    const content = meta.getAttribute("content") || "";
+    let content = meta.getAttribute("content") || "";
     if (orig !== null && content === ours) {
       // A page may have more than one viewport tag (one in the page, one its script adds or rewrites later), and Safari
       // goes by the one it read last: each of them carries ours, and one the page writes to again gets ours back.
@@ -362,7 +389,7 @@
         if (t === meta || c === ours) continue;
         if (others.has(t) && !rewrote()) return;
         if (!others.has(t)) metaWatch.observe(t, { attributes: true, attributeFilter: ["content"] });
-        others.set(t, c);
+        others.set(t, theirs(c));
         t.setAttribute("content", ours);
       }
       if (passing()) return;
@@ -379,9 +406,9 @@
       }
       return;
     }
-    if (orig !== null && content === orig) {
-      // The page put its own content back (some do whenever the window resizes): ours goes straight back, before
-      // Safari lays the page out again, and what was fitted to it stays.
+    if (orig !== null && theirs(content) === orig) {
+      // The page put its own content back (some do whenever the window resizes), or ours from before (see theirs): ours
+      // goes straight back, before Safari lays the page out again, and what was fitted to it stays.
       if (rewrote()) meta.setAttribute("content", ours);
       return;
     }
@@ -390,6 +417,7 @@
       orig = null;
       unfix();
     }
+    if (wrote.has(content)) { theirsBack(); content = meta.getAttribute("content") || ""; }  // (ours, see theirs)
     if (!fitsPhone(content)) return;
     const s = detect();
     if (s && (s.side !== "both" || heldStill())) apply(content, s);
@@ -411,6 +439,7 @@
     }
     for (const [t, c] of others) if (t.getAttribute("content") === ours) t.setAttribute("content", c);
     others.clear();
+    theirsBack();
     orig = null;
     ours = "";
     strip = null;
@@ -460,8 +489,8 @@
       for (const t of document.querySelectorAll('meta[name="viewport" i]')) {
         const c = t.getAttribute("content") || "";
         if (t === meta || c === ours) continue;
-        if (!others.has(t)) { others.set(t, c); metaWatch.observe(t, { attributes: true, attributeFilter: ["content"] }); }
-        else if (c !== was) others.set(t, c);  // (the page's own, written since)
+        if (!others.has(t)) { others.set(t, theirs(c)); metaWatch.observe(t, { attributes: true, attributeFilter: ["content"] }); }
+        else if (c !== was) others.set(t, theirs(c));  // (the page's own, written since)
         t.setAttribute("content", ours);
       }
     }
@@ -483,6 +512,7 @@
       if (changes) changes.takeRecords();  // (its own restyling)
     }
     settle();
+    if (document.readyState === "loading" && s.side !== "both") firstFrame();  // (beside another window the room waits for the look, as above)
   }
 
   function restore() {
@@ -493,6 +523,7 @@
     } else if (meta && orig !== null && meta.getAttribute("content") === ours) meta.setAttribute("content", orig);
     for (const [t, c] of others) if (t.getAttribute("content") === ours) t.setAttribute("content", c);
     others.clear();
+    theirsBack();  // (and copies of ours)
     orig = null;
     ours = "";
     strip = null;
@@ -516,6 +547,27 @@
     if (!strip || !scaled || zoomed()) return;
     asleep = true;
     restore();
+  }
+
+  // Safari may lay the page out at those sizes before it says the page is hidden, though: the page came back zoomed in
+  // all the same, by 1.22 (his recording, 11-02), no finger on it. A viewport tag the page writes keeps the reader's
+  // scale too (WebPage::viewportConfigurationChanged), but for one at the tag's least, which goes to the new tag's least.
+  // So a page zoomed in with no finger on it gets ours written twice at once: first with its least a little over the
+  // scale shown, which takes the page there, then as it was, which takes it on to the least, as the reader left it.
+  // Safari draws neither in between. A page the reader never zoomed may be zoomed in so too: a Naver page went to 1.22
+  // as Safari went to the background, its keyboard up, and came back so (his screenshot, 11-03). And one that comes
+  // back zoomed in with none of the reader's zoom on it, Safari having zoomed it while it was hidden, is put back as it
+  // shows. A double tap or a pinch zooms as ever.
+  function unzoom() {
+    const t = own || meta;
+    if (!t || !ours || t.getAttribute("content") !== ours) return;
+    const m = parse(ours), least = Math.min(5, Math.round((scales().pinch * 1.25 + 0.05) * 1000) / 1000);
+    m.set("minimum-scale", String(least));
+    m.set("maximum-scale", "5");
+    m.set("user-scalable", "yes");
+    t.setAttribute("content", [...m].map(([k, v]) => (v ? `${k}=${v}` : k)).join(", "));
+    t.setAttribute("content", ours);
+    metaWatch.takeRecords();  // (its own)
   }
 
   // ---------- the screen's width in CSS units ----------
@@ -896,6 +948,22 @@
     clearTimeout(settleTimer);
     settleTimer = setTimeout(() => { pin(); refix(true); refixAllSoon(1200); }, 120);
   }
+  // Safari draws a page that is still coming only once it has something to show (WebKit holds its frames back until
+  // the page's first visually non-empty layout), and the page's animation frames run first in that frame. A page
+  // widened as it comes is looked at there too, before Safari first draws it, its controls in place from the start.
+  // Looked at only a moment on, Apple's menu bar first showed its search, bag and menu buttons where the widened page
+  // lays them out (322..466, the menu button under the strip), and they jumped into place (his recording, 11-03).
+  let drawn = false, firstAsk = 0;
+  function firstFrame() {
+    if (drawn || firstAsk) return;
+    firstAsk = requestAnimationFrame(function first() {
+      firstAsk = 0;
+      if (drawn || !strip) return;
+      if (!document.body || !document.body.firstElementChild) { firstAsk = requestAnimationFrame(first); return; }  // (nothing to show yet)
+      drawn = true;
+      refix(true);
+    });
+  }
 
   // The page is wider than the part Safari counts as visible, so Safari lets it slide sideways by the strip's width.
   // Keep it where it lines up with the screen: at the left edge, or past the strip when the strip is on the left (or
@@ -972,33 +1040,79 @@
   // landed. (Focused as the finger lifted, before the tap's own focus, the field went to Safari with that one after
   // all, and the page still slid: his recording, 11-01 23:47.) The scroll up or down Safari would have made is made
   // here (see reveal). Where Safari would scroll it up or down only, the field is left to Safari, as is one the page
-  // takes the touch or the mousedown for, one in a bar (where scrolling the page doesn't bring it up), one focused
-  // before the tap (the keyboard up for it already), and one the reader goes on to with the keyboard's arrows (see
-  // revealing). (A tap as Safari takes it: a finger on the field, off within half a second, no more than 10 points
-  // from where it came down.)
+  // takes the touch or the mousedown for, one low in a bar (where scrolling the page doesn't bring it up, see keepPut),
+  // one with the keyboard up for it as the finger came down (tapped again, Safari moves only the caret), and one the
+  // reader goes on to with the keyboard's arrows (see revealing). The tap's field is the one its mouse events come to
+  // as well as the one the finger came down on: on a page a double tap zooms, as a widened one is, Safari sends those
+  // a few tenths of a second after the finger lifts, once no second tap has come, and the page may have put a field in
+  // focus there meanwhile. Naver Cafe answers a tap on its search box with its search screen, its field in focus where
+  // the finger was. That focus brings up no keyboard (the reader isn't touching the page as it comes); the tap's
+  // mousedown on the field then focuses it once more, which asks for the scroll and brings the keyboard up, and the
+  // page slid 25 points over and back (his recordings, 11-03). A field focused before the tap without the keyboard
+  // up, as a page may focus one by itself, goes to Safari with the tap's focus in the same way. (A tap as Safari takes
+  // it: a finger on the field, off within half a second, no more than 10 points from where it came down.)
   const PICKS = /^(date|datetime-local|month|week|time)$/;
   const typesIn = (el) => el instanceof HTMLElement && (el.isContentEditable || ((el.localName === "textarea" || (el.localName === "input" && !NO_KEYS.test(el.type) && !PICKS.test(el.type))) && !el.disabled && !el.readOnly));
-  let steered = null;  // { field, at, caret, top }: a field focused so, until the reader leaves it (caret: where in it, see steer)
+  let steered = null;  // { field, at, caret, top, bar }: a field focused so, until the reader leaves it (caret: where in it, see steer)
   let tapUp = null;    // the tap whose mouseup and click are still to come (see watch)
+  let tapped = null;   // the last tap, after those
   function steer(e) {
-    const t = tapUp, v = window.visualViewport, field = deepActive();
-    if (!t || !v || !e.isTrusted || performance.now() - t.end > 1000 || !typesIn(field) || field === t.was || !(field === t.target || field.contains(t.target))) return;
+    const t = tapUp, field = deepActive(), on = (n) => n instanceof Node && (field === n || field.contains(n));
+    if (!t || !e.isTrusted || performance.now() - t.end > 1000 || !typesIn(field) || (field === t.was && t.keys) || !(on(t.target) || on(e.composedPath()[0]))) return;
     if (steered && steered.field === field) { field.focus({ preventScroll: true }); return; }  // (again, after the page's own)
-    if (!strip || wide || passing() || (dbg && dbg.steer === false)) return;
-    for (let el = field; el && el !== document.documentElement; el = el.parentElement) if (/fixed|sticky/.test(getComputedStyle(el).position)) return;
+    keepPut(field, t);
+  }
+  // A field the page focuses itself in answer to a tap (a search button that opens a search sheet with its field in
+  // focus, a label) goes to Safari with that focus, which asks for the scroll: Apple's search sheet slid the page 14
+  // points over and back as its keyboard came up (his recording, 11-02). It is focused again once the page's script
+  // that focused it is done, and once more after that task, in case none of the page's was running (a label's), the
+  // caret where such a focus leaves it: at the end of what is in the field, at the start of an empty one. And once
+  // more as the page is next drawn, the last moment before WebKit hands Safari the focus: Safari goes by the first
+  // focus of a field it takes (WKContentView's _isSameAsFocusedElement), and the page may be drawn between one task
+  // and the next. Naver Cafe's search field, focused by its page, was focused again only after the task, and the page
+  // still slid 25 points over and back (his recordings, 11-03; it slid as much with this, by the tap's own focus of the
+  // field after the page's, see steer).
+  function steerFocused(e) {
+    const t = tapped, field = deepActive();
+    if (!t || !e.isTrusted || touchedAt > t.end || performance.now() - t.end > 1000 || !typesIn(field) || field === t.was || field === t.target || field.contains(t.target)) return;
+    const again = () => {
+      if (deepActive() !== field) return;
+      if (steered && steered.field === field) field.focus({ preventScroll: true });
+      else keepPut(field, null);
+    };
+    queueMicrotask(again);
+    setTimeout(again, 0);
+    requestAnimationFrame(again);
+  }
+  // A field in a bar the page keeps on the screen (fixed or sticky) shows where it is however the page is scrolled:
+  // one above where the keyboard comes up is focused so too, and not scrolled to (Naver Cafe's search box in its sticky
+  // bar slid the page 25 points over and back: his recording, 11-02). One lower down is left to Safari, which brings it
+  // up above the keyboard. (A rect in WebKit counts from the corner of the part shown, see sidewaysTo.)
+  function keepPut(field, t) {
+    const v = window.visualViewport;
+    if (!v || !strip || wide || passing() || (dbg && dbg.steer === false)) return;
+    let bar = false;
+    for (let el = field; el && el !== document.documentElement; el = up(el)) if (/fixed|sticky/.test(getComputedStyle(el).position)) { bar = true; break; }
+    const r = field.getBoundingClientRect();
+    if (bar && !(r.top >= -1 && r.bottom <= (keyboardUp() ? v.height : windowHeight() * 0.4))) return;
     // The caret, as the tap leaves it: where it landed, on its line; at the start of an empty field. Single-line
     // fields have it the whole line high.
-    const r = field.getBoundingClientRect(), s = getComputedStyle(field), px = (p) => parseFloat(s[p]) || 0;
+    const s = getComputedStyle(field), px = (p) => parseFloat(s[p]) || 0;
     const box = { left: px("borderLeftWidth") + px("paddingLeft"), right: r.width - px("borderRightWidth") - px("paddingRight"), top: px("borderTopWidth") + px("paddingTop"), bottom: r.height - px("borderBottomWidth") - px("paddingBottom") };
     const empty = field.isContentEditable ? !field.textContent.trim() : !field.value;
     const line = parseFloat(s.lineHeight) || 1.2 * px("fontSize");
-    const x = empty ? box.left : Math.min(Math.max(t.x - r.left, box.left), box.right);
-    const y = field.localName === "input" ? (box.top + box.bottom) / 2 : empty ? box.top + line / 2 : Math.min(Math.max(t.y - r.top, box.top + line / 2), box.bottom - line / 2);
+    const x = empty ? box.left : t ? Math.min(Math.max(t.x - r.left, box.left), box.right) : box.right;
+    const y = field.localName === "input" ? (box.top + box.bottom) / 2 : empty ? box.top + line / 2 : t ? Math.min(Math.max(t.y - r.top, box.top + line / 2), box.bottom - line / 2) : box.bottom - line / 2;
     const caret = { left: x, right: x + 1, top: field.localName === "input" ? box.top : y - line / 2, bottom: field.localName === "input" ? box.bottom : y + line / 2 };
-    if (Math.abs(sidewaysTo(r, caret) - v.pageLeft) < 0.5) return;
+    // Safari goes by where the field is once its keyboard is up, a quarter of a second on: one the page focused itself,
+    // or one still moving as it is focused (a sheet growing open around it), may not be where it will be. Apple's search
+    // field, focused as its sheet opened, lay centered in the part shown (40..341) and ended wider (40..366), 12 points
+    // right of the middle, as far as the page slid. Those are held whatever their place now.
+    const moving = () => { for (let e = field; e && e !== document.documentElement; e = up(e)) if (e.getAnimations && e.getAnimations().some((a) => a.playState === "running")) return true; return false; };
+    if (t && !moving() && Math.abs(sidewaysTo(r, caret) - v.pageLeft) < 0.5) return;
     field.focus({ preventScroll: true });
-    steered = { field, at: performance.now(), caret, top: NaN };
-    setTimeout(reveal, keyboardUp() ? 0 : 600);  // (the keyboard up already, or none coming: one on its own)
+    steered = { field, at: performance.now(), caret, top: NaN, bar };
+    if (!bar) setTimeout(reveal, keyboardUp() ? 0 : 600);  // (the keyboard up already, or none coming: one on its own)
   }
   // Where Safari puts the part it shows, sideways, for a field the keyboard comes up for (WebKit's _zoomToFocusRect,
   // in the page's terms): its left edge where the field is centered across it, or, for a field wider than it, as near
@@ -1029,7 +1143,7 @@
   // page came back half a second later (his recording, 11-02 01:28).
   function reveal() {
     const st = steered, v = window.visualViewport;
-    if (!st || !v || !strip || document.activeElement !== st.field || !st.field.isConnected || performance.now() - st.at > 1500) return;
+    if (!st || st.bar || !v || !strip || document.activeElement !== st.field || !st.field.isConnected || performance.now() - st.at > 1500) return;
     const r = st.field.getBoundingClientRect(), vh = v.height;
     const y = r.top + scrollY, foot = pageFoot();
     let to = r.height < vh ? y - (vh - r.height) / 2 : Math.min(Math.max(v.pageTop, y - vh / 2), y);
@@ -1201,7 +1315,7 @@
         width: `${pt(TRACK.width)}px`, height: `${pt(len)}px`, margin: "0", padding: "0", border: "0", "border-radius": `${pt(TRACK.width / 2)}px`,
         background: barColor, transform: `translateY(${pt(top)}px)`, display: "block", visibility: "visible", opacity: "1",
         transition: "none", "pointer-events": "none", "z-index": "2147483647" });
-      if (bar.parentNode !== root) root.appendChild(bar);
+      if (bar.parentNode !== root) root.insertBefore(bar, [...root.children].find((e) => e.getAttribute(MARK) === "edge") || null);  // (under ours at the strip's edge, see guardBox)
       clearTimeout(barShown);
       barShown = touching ? -1 : setTimeout(hideBar, 500);  // (kept while a finger is on the page)
     });
@@ -1211,8 +1325,10 @@
     clearTimeout(barShown);
     barShown = 0;
     if (!bar) return;
-    bar.style.setProperty("transition", "opacity 0.25s", "important");
+    // (Hidden once faded, out of what Safari looks at by the strip's edge, see guardBox.)
+    bar.style.setProperty("transition", "opacity 0.25s, visibility 0s 0.25s", "important");
     bar.style.setProperty("opacity", "0", "important");
+    bar.style.setProperty("visibility", "hidden", "important");
   }
 
   // Dark or light as WebKit tells the page's background for its own: the root's color, else the body's, else the page's
@@ -1492,32 +1608,44 @@
   // everything, showing nothing and taking no touches, so the strip stays glass. It goes in as soon as the page is
   // widened, before the page's own boxes are drawn. Beside another window, where the strip may be on either side, one
   // sits at each edge of the part shown.
+  // The point is 4 points in from the end of the part fixed boxes are laid out in (as wide as the screen), halfway
+  // down it as far as the page reaches, and a box counts as small by the same part (WebKit's
+  // LocalFrameView::fixedContainerEdges). Ours is a line a point high at the top of the window, small at any height,
+  // and what it holds hangs down past the foot of the window from it: Safari finds that wherever the middle is, and
+  // counts ours, the fixed box it is in.
+  // Nothing else of ours may lie over it there: a box Safari finds first that is hidden or all but clear and takes no
+  // touches has it look again past everything that takes no touches, ours too. Our scroll bar runs along that very
+  // edge, and faded out it stayed in place over ours: Naver Cafe's sticky search bar was found under it, and the strip
+  // went gray as the keyboard came up and stayed so while that bar showed (his recordings, 11-02 and 11-03; macOS
+  // WebKit paints its strip so too, test/strip-color.swift). The bar goes in under ours, and is hidden once it has
+  // faded (see showBar).
   let edge = null, edgeCss = "", edgeLeft = null, edgeLeftCss = "";
   const cssOf = (css) => Object.entries(css).map(([k, v]) => `${k}:${v}!important`).join(";");
   const guards = () => (strip && strip.side === "both" ? [edge, edgeLeft] : [edge]).filter(Boolean);
-  function guardBox() {
+  function guardBox(side) {
     const box = document.createElement("div");
     box.setAttribute(MARK, "edge");
     box.setAttribute("aria-hidden", "true");
-    // An empty box with no color counts as nothing there, so it holds one, which fills it: what Safari finds there
-    // first is that, a box with no ::backdrop of its own in the top layer either (see topEdge).
+    // An empty box with no color counts as nothing there, so it holds one: what Safari finds there first is that, a
+    // box with no ::backdrop of its own in the top layer either (see topEdge). (Fixed boxes take no room in the page,
+    // nor does what they hold: it doesn't make the page longer.)
     const fill = document.createElement("div");
-    fill.style.cssText = cssOf({ display: "block", width: "100%", height: "100%", margin: "0", padding: "0", border: "0", background: "none",
-      "pointer-events": "none" });
+    fill.style.cssText = cssOf({ position: "absolute", display: "block", top: "0", [side]: "0", width: "100%", height: "200vh", margin: "0", padding: "0",
+      border: "0", background: "none", "pointer-events": "none" });
     box.appendChild(fill);
     return box;
   }
   function guardEdge() {
     if (!strip || strip.side === "left") { if (edge) edge.remove(); if (edgeLeft) edgeLeft.remove(); lifted = new Set(); return; }
-    if (!edge) edge = guardBox();
+    if (!edge) edge = guardBox("right");
     const { lo, hi, min, max } = clearBand(), both = strip.side === "both";
-    const at = (side, width) => cssOf({ position: "fixed", top: "25%", height: "50%", right: side === "right" ? "0" : "auto", left: side === "left" ? "0" : "auto",
+    const at = (side, width) => cssOf({ position: "fixed", top: "0", height: "1px", right: side === "right" ? "0" : "auto", left: side === "left" ? "0" : "auto",
       bottom: "auto", width: `${width}px`, margin: "0", padding: "0", border: "0", display: "block", overflow: "visible", opacity: "1", visibility: "visible",
       background: "none", transform: "none", "pointer-events": "none", "z-index": "2147483647" });
     const css = at("right", max - hi + 8);
     if (css !== edgeCss || !edge.style.cssText) { edge.style.cssText = css; edgeCss = css; }
     if (both) {
-      if (!edgeLeft) edgeLeft = guardBox();
+      if (!edgeLeft) edgeLeft = guardBox("left");
       const left = at("left", lo - min + 8);
       if (left !== edgeLeftCss || !edgeLeft.style.cssText) { edgeLeft.style.cssText = left; edgeLeftCss = left; }
     } else if (edgeLeft) edgeLeft.remove();
@@ -1992,7 +2120,7 @@
   const framed = (e) => keepers.has(e) || handed.has(e);
   const EDGE_PROPS = ["border-image-source", "border-image-slice", "border-image-width", "border-image-outset", "border-image-repeat"];
   const FRAME_PROPS = ["padding-left", "padding-right", "box-sizing", "border-left-width", "border-left-style", "border-left-color",
-    "border-right-width", "border-right-style", "border-right-color", "aspect-ratio", ...EDGE_PROPS];
+    "border-right-width", "border-right-style", "border-right-color", "aspect-ratio", "overflow-x", ...EDGE_PROPS];
   const edged = new Set();    // keepers holding it as a clear border (see holding)
   const WHOLE = /^(img|picture|video|canvas|iframe|embed|object|svg|table|input|select|textarea|button)$/;  // (laid out whole: no room goes into one)
 
@@ -2209,11 +2337,11 @@
     // its width. One that holds all it shows placed across it, nothing in its flow, hands the room on to that: Apple's
     // navigation bar, its row of links placed over it.)
     if (!kids.length && !sealed && !past.length && !over.length && !ratio) return;
-    const inside = insideOf(e);
-    if (!sealed && !out_ && !ratio && !ownMarks(e) && kids.every((c) => fills(c, inside)) && !slides(e, kids) && !kids.some(framesPanels)) {
+    const inside = insideOf(e), afloat = holdsPage(e) ? kids.filter(floatsIn) : [];
+    if (!sealed && !out_ && !ratio && !ownMarks(e) && kids.every((c) => afloat.includes(c) || fills(c, inside)) && !slides(e, kids) && !kids.some(framesPanels)) {
       out.hand.push(e);
-      for (const c of past) out.bring.push([c, e]);
-      for (const c of kids) plan(c, out);
+      for (const c of [...past, ...afloat]) out.bring.push([c, e]);
+      for (const c of kids) if (!afloat.includes(c)) plan(c, out);
     } else {
       const held = holding(e);
       out.hold.push(held);
@@ -2262,6 +2390,12 @@
   // and the box keeps the room as a row does. Brought in by translate (see nudge), so that the page's own placing stands.
   const holdsPage = (e) => e.getBoundingClientRect().height > windowHeight();
   const comesIn = (c) => { const { lo, hi } = clearBand(); return c.getBoundingClientRect().width <= hi - lo + 0.5; };
+  // So does a button or an icon it floats to one side, in its flow (a "back to top" button floated to the right of the
+  // page's end): it comes in by its margin there, as wide as it was. Taken for one that doesn't lie across the box,
+  // Inven's ▲ kept the room on the page's wrapper beside another window, and its header's dark bar ended at the strip,
+  // white under it (his recording, 11-03: "스플릿뷰에서 인벤 오른쪽 위 안채워짐"). (No wider than the strip: a float
+  // as wide as a column of the page is laid out by the box's width, as the box keeps the room.)
+  const floatsIn = (c) => c.nodeType === Node.ELEMENT_NODE && getComputedStyle(c).float !== "none" && c.getBoundingClientRect().width <= strip.gap;
   const brought = new Map();  // what a box handed the room places, brought in -> that box
   const NUDGES = ["translate", "margin-left", "margin-right"];
   function bringIn(c, e) {
@@ -2269,7 +2403,9 @@
     brought.delete(c);
     const band = clearBand();
     if (!outside(c, band)) return;
-    nudge(c, c.getBoundingClientRect().left < band.lo - 0.5 ? strip.gap : -strip.gap);
+    const dx = c.getBoundingClientRect().left < band.lo - 0.5 ? strip.gap : -strip.gap, side = dx > 0 ? "left" : "right";
+    if (getComputedStyle(c).float !== side) nudge(c, dx);
+    else setProp(c, `margin-${side}`, `${(parseFloat(getComputedStyle(c).getPropertyValue(`margin-${side}`)) || 0) + strip.gap}px`);  // (what flows beside it makes way as there)
     brought.set(c, e);
   }
   // (The box keeps the room after all, or lets it go: what it places goes back to where the page has it.)
@@ -2353,7 +2489,7 @@
       failed.push(e);
     }
     for (const e of out.hand) if (handed.has(e)) place(e);
-    for (const [e] of out.hold) if (keepers.has(e)) place(e);
+    for (const [e] of out.hold) if (keepers.has(e)) { place(e); cutAtMiddle(e); }
     for (const e of failed) {
       if (!e.isConnected || keepers.has(e)) continue;
       const p = e === document.documentElement ? null : boxAround(e);
@@ -2364,6 +2500,53 @@
     for (const [e, , , , , , roll] of out.hold) if (roll && keepers.has(e)) for (const c of placedOut(e)) if (comesIn(c)) bringIn(c, e);
   }
   function letGo(e) { unsetProps(e, FRAME_PROPS); keepers.delete(e); edged.delete(e); edges.delete(e); unplace(e); sendBack(e); }
+
+  // A box keeping the room as a clear border, in a page's wrapper that cuts off what it holds sideways (or in a page
+  // whose <body> does), cuts off what it holds at the inside of its border itself. In Safari's own layout the wrapper is
+  // as wide as the window and cuts off what reaches past it there, the slides beside the one a carousel shows among
+  // it; handed the room, it runs on to the screen's ends and cuts off nothing short of them. Inven's home showed its
+  // next slide's list under the strip on the right, and swiped on, the slide before under the strip on the left (his
+  // recording, 11-03): its carousel's box doesn't clip its slides, the wrapper did. Cut off at the inside of the border,
+  // where the window's edges are in Safari's own layout, they are out of sight again, and the box's own color still
+  // runs on under the strips. (Only one whose inside is all of the middle: in a wrapper with paddings of its own, it
+  // would cut off what shows in them. Nor one that lays boxes of its own past its sides, a carousel's row of slides
+  // that it slides along itself: cut off where it lies, it would cut off the next slide as it slid that in. Clipped,
+  // unlike hidden, it scrolls nothing and lays nothing out anew. Where its boxes are laid out, not where a transform
+  // draws them: a box holding the row of slides its script slides along is cut off as the row slides in it. Inven's
+  // home, once its wrapper handed the room on, kept it on the box its row of panels slides in, and that row, slid to
+  // its second panel as the page starts, was taken for one laid past the box: the next panel's list showed under the
+  // strip again.)
+  function cutAtMiddle(e) {
+    const cs = getComputedStyle(e), r = e.getBoundingClientRect(), { lo, hi } = clearBand();
+    if (!edged.has(e) || cs.overflowX !== "visible") return;
+    const left = r.left + (parseFloat(cs.borderLeftWidth) || 0), right = r.right - (parseFloat(cs.borderRightWidth) || 0);
+    if (Math.abs(left - lo) > 1 || Math.abs(right - hi) > 1) return;
+    const past = (c) => { const q = laidAt(c); return q.left < left - 0.5 || q.right > right + 0.5; };
+    if (kidsOf(e).some((c) => c.nodeType === Node.ELEMENT_NODE && past(c)) || !panelsIn(e)) return;
+    for (let p = up(e); p; p = up(p)) if (/hidden|clip/.test(getComputedStyle(p).overflowX)) { setProp(e, "overflow-x", "clip"); return; }
+  }
+  // Whether a box holds a row of panels as wide as the middle, one shown across its middle and another beside it:
+  // slides that Safari's own layout cuts off at the window's edges. A row of cards narrower than that shows the cards
+  // beside the ones in the middle under the strips, as a wider screen does (see rolls): Apple's gallery of shows, cut
+  // off at the middle, left the strips beside its cards white (his recording, 11-03: "스플릿뷰에서 애플 캐러셀 같은건
+  // 어케안되나?"). (As wide as the middle or wider: the page's script may not have sized them to it yet, as the box
+  // takes the room. Looked at again at each look until then, see frame.)
+  function panelsIn(e) {
+    const { lo, hi } = clearBand(), w = hi - lo, mid = (lo + hi) / 2;
+    const shown = (q) => q.left <= mid && q.right >= mid;
+    const beside = (a, b) => Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > Math.min(a.height, b.height) / 2;
+    let budget = 400;
+    const row = (p, depth) => {
+      const kids = [...p.children].filter((c) => !c.hasAttribute(MARK));
+      if ((budget -= kids.length) < 0) return false;
+      // (Beside it by its top, as tall as it or not: the panels Inven's home doesn't show are as tall as nothing, their
+      // lists running out of them.)
+      const items = kids.map((c) => c.getBoundingClientRect()).filter((q) => q.width >= w * 0.9);
+      if (items.some((a) => a.height >= 20 && shown(a) && items.some((b) => !shown(b) && (Math.abs(a.top - b.top) < 2 || beside(a, b))))) return true;
+      return depth < 5 && kids.some((c) => row(c, depth + 1));
+    };
+    return row(e, 1);
+  }
 
   // A box keeping the room whose look is a picture filling all of it (a page's banner or cover: a picture as wide as the
   // middle and as tall as the box, drawn to its edges) carries the picture on into the strips, across the box's clear
@@ -2380,7 +2563,7 @@
   // what it hides: drawn across, its outermost columns showed the picture itself stretched on under the strips (a
   // screenshot in a Naver Cafe post, as wide as the middle, ran on in its dark outermost columns). Not one the box shows
   // only part of its height, or one with a border of its own over or under it, which border-image would replace.
-  const edges = new Map();  // keepers -> the picture whose edges they carry on, and how
+  const edges = new Map();  // keepers -> the picture whose edges they carry on, or the colors of their rows (see rowColors), and how
   function edgePicture(k) {
     const b = k.getBoundingClientRect(), inside = insideOf(k), cs = getComputedStyle(k);
     if (parseFloat(cs.borderTopWidth) > 0 || parseFloat(cs.borderBottomWidth) > 0) return null;
@@ -2429,9 +2612,80 @@
   // in a box carrying edges or around one, a picture that loads in one, and a transition or animation that ends there
   // (a slide faded or zoomed in) has it looked at again in that frame. Its edges stay while no picture fills it (a
   // banner between two slides), until the next look.
+  // A box keeping the room that shows no picture there carries on the colors of the rows it holds across its inside
+  // instead (a pager's panel, its sections white between gray gaps, the box they slide in clear), row by row, by a
+  // gradient of them drawn across its clear border: the strips beside it show what a wider screen would, not the color
+  // of the box around it. (Inven's home keeps its panels in the middle by the box they slide in, and the strips beside
+  // its white sections showed the gray of the page behind them.) Only rows laid across all of its inside, painted a
+  // color of their own and shown; deeper ones over those around them. None that is or lies in a shape, its corners
+  // rounded or lines down its sides (a card, a table drawn in a frame): what it holds ends where it ends. [top, bottom,
+  // color], from the box's top. Not in a box with paddings of its own beside its inside, which would show between the
+  // rows and the strips. (Looked for only in boxes across all of it, or laying boxes out past their sides, a row of
+  // slides moved along: what lies in a narrower one is narrower too, and a page of many boxes kept in the middle,
+  // Wikipedia's, had each look read the words of every paragraph. Nor in one drawn see-through, a slide faded out: its
+  // rows aren't what shows.)
+  function rowColors(k) {
+    const r = k.getBoundingClientRect(), cs = getComputedStyle(k), inside = insideOf(k), rows = [];
+    if (Math.abs(inside.left - r.left - (parseFloat(cs.borderLeftWidth) || 0)) > 1 || Math.abs(r.right - (parseFloat(cs.borderRightWidth) || 0) - inside.right) > 1) return rows;
+    const bare = (c, s) => /^(none|hidden)$/.test(c[`border${s}Style`]) || !(parseFloat(c[`border${s}Width`]) > 0);
+    const queue = [[k, 1, 1]];
+    for (let n = 0, i = 0; i < queue.length && n < 400 && rows.length < 48; i++) {
+      const [e, depth, alpha] = queue[i];
+      for (const c of e.children) {
+        if (++n >= 400) break;
+        if (c.hasAttribute(MARK)) continue;
+        const q = c.getBoundingClientRect();
+        if (!q.width && !q.height) { if (depth < 6 && getComputedStyle(c).display === "contents") queue.push([c, depth + 1, alpha]); continue; }  // (its boxes are its parent's)
+        if (q.height < 1 || q.bottom <= r.top || q.top >= r.bottom || ((q.left > inside.left + 1 || q.right < inside.right - 1) && !(c.scrollWidth > c.clientWidth + 1))) continue;
+        const ccs = getComputedStyle(c), seen = alpha * parseFloat(ccs.opacity);
+        if (ccs.display === "none" || /^(fixed|sticky)$/.test(ccs.position) || !(seen > 0.01) ||
+          CORNERS.some((s) => parseFloat(ccs[`border${s}Radius`]) > 1) || !bare(ccs, "Left") || !bare(ccs, "Right")) continue;
+        if (Math.abs(q.left - inside.left) < 1 && Math.abs(q.right - inside.right) < 1 && painted(ccs.backgroundColor) && ccs.visibility !== "hidden" && seen > 0.99)
+          rows.push([Math.max(q.top, r.top) - r.top, Math.min(q.bottom, r.bottom) - r.top, ccs.backgroundColor]);
+        if (depth < 6) queue.push([c, depth + 1, seen]);
+      }
+    }
+    return rows;
+  }
+  // Those rows down the box's height, each over those before it, clear between them.
+  function rowGradient(rows, height) {
+    const ys = [...new Set([0, height, ...rows.flatMap(([t, b]) => [t, b])])].sort((a, b) => a - b), stops = [];
+    for (let i = 0; i + 1 < ys.length; i++) {
+      const mid = (ys[i] + ys[i + 1]) / 2, last = stops[stops.length - 1];
+      let color = "transparent";
+      for (const [t, b, c] of rows) if (t <= mid && mid < b) color = c;
+      if (last && last[0] === color) last[2] = ys[i + 1];
+      else stops.push([color, ys[i], ys[i + 1]]);
+    }
+    return `linear-gradient(${stops.map(([c, a, b]) => `${c} ${+a.toFixed(1)}px ${+b.toFixed(1)}px`).join(", ")})`;
+  }
+  const rowsAt = new WeakMap(), rowsLater = new Set();  // a box whose rows' colors were last read -> when; those to read once more
+  let rowsTimer = 0;
   function carryEdges(k, keep = false) {
     const img = edged.has(k) ? edgePicture(k) : null;
     let src = "", how = "", sides = [];
+    if (!img && edged.has(k)) {
+      // (Read again twice a second at most as what it holds changes, see edgesIn: a box whose rows change in every
+      // frame, a ticker's, isn't walked through in every frame. Once more half a second on, so that how it changed last,
+      // a slide come to rest, is what its strips show. A look reads them again.)
+      if (keep && performance.now() - (rowsAt.get(k) || -Infinity) < 500) {
+        rowsLater.add(k);
+        if (!rowsTimer) rowsTimer = setTimeout(() => {
+          rowsTimer = 0;
+          const ks = [...rowsLater];
+          rowsLater.clear();
+          for (const b of ks) if (b.isConnected && keepers.has(b)) carryEdges(b, true);
+        }, 500);
+        return;
+      }
+      rowsAt.set(k, performance.now());
+      const rows = rowColors(k), cs = getComputedStyle(k);
+      if (rows.length) {
+        src = rowGradient(rows, k.getBoundingClientRect().height);
+        sides = ["Left", "Right"].map((s) => ["1", parseFloat(cs[`border${s}Width`]) || 0, 0]);  // (one column of it, the whole of its height)
+        how = JSON.stringify([src, sides]);
+      }
+    }
     if (img) {
       // On each side, from the picture's own side in: what it hides past the box's padding, as a share of it, drawn as
       // wide as it is drawn and out past the box where that is more than the border; or its outermost column, under
@@ -2448,7 +2702,7 @@
     if (!how) { edges.delete(k); unsetProps(k, EDGE_PROPS); return; }
     edges.set(k, how);
     const [[sl, wl, ol], [sr, wr, or]] = sides;
-    setProp(k, "border-image-source", `url("${src.replace(/["\\]/g, "\\$&")}")`);
+    setProp(k, "border-image-source", img ? `url("${src.replace(/["\\]/g, "\\$&")}")` : src);
     setProp(k, "border-image-slice", `0 ${sr} 0 ${sl}`);  // (the whole of its height)
     setProp(k, "border-image-width", `0 ${wr}px 0 ${wl}px`);
     setProp(k, "border-image-outset", `0 ${or}px 0 ${ol}px`);
@@ -2549,6 +2803,7 @@
     plan(root, out);
     for (const p of pages) plan(p, out);  // (a fixed box that is the page itself, see clearBar)
     holdAll(out);
+    for (const k of edged) if (k.scrollWidth > k.clientWidth + 1) cutAtMiddle(k);  // (its panels laid out since, see panelsIn)
     for (const k of keepers) carryEdges(k);
   }
 
@@ -2652,7 +2907,9 @@
   }
 
   let movers = [];          // { el, props }: what the script moved inside, and how
+  let unseen = new Set();   // controls the last look found under the strip, hidden (see changes)
   const insets = new Map(); // block -> its text nodes, given room for good: lines on the left, words around a link, rows for a control
+  const roomed = new Map(); // row -> what it was given: room for good for a control (see forGood)
   // A block given room for good by ending before the strip carries its color and border lines under the strip (see
   // underOf) for the height it had then: one that grows (a page's categories opened out) carries them again for its
   // new height, or its border's lines would paint a block of their color under the strip.
@@ -2981,6 +3238,42 @@
     }
     return null;
   }
+  // Where the box drawn around something holds it, as a card does: the nearest box around it with lines down its sides
+  // or a color of its own, inside its border. (Slid out of its card, the head of GitHub's chart card on the right,
+  // title and buttons, went over onto the card on the left, carrying that one's gear along onto its title: 11-03.)
+  function cardOf(el) {
+    for (let e = el.parentElement; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
+      const cs = getComputedStyle(e);
+      const lined = ["Left", "Right"].some((s) => !/^(none|hidden)$/.test(cs[`border${s}Style`]) && parseFloat(cs[`border${s}Width`]) > 0 && painted(cs[`border${s}Color`]));
+      if (!lined && !painted(cs.backgroundColor)) continue;
+      const b = e.getBoundingClientRect();
+      return { left: b.left + (parseFloat(cs.borderLeftWidth) || 0), right: b.right - (parseFloat(cs.borderRightWidth) || 0) };
+    }
+    return null;
+  }
+
+  // Where a box shows across: where it lies, cut off by the boxes around it that clip what they hold sideways, each
+  // at the inside of its border. One placed absolutely is cut off only by the box it is placed against and those that
+  // one is in, and one placed fixed only by a box that holds it as that one would (a transformed one). What lies past
+  // a box keeping the room in the middle that cuts off what it holds there (see cutAtMiddle) doesn't show under the
+  // strip: the slides beside the one a carousel shows, and the buttons in them (Inven's search box and its button, on
+  // the slide swiped away under the strip, slid out of it onto the slide shown).
+  const holdsFixed = (cs) => cs.transform !== "none" || cs.filter !== "none" || cs.perspective !== "none" || /paint|layout|strict|content/.test(cs.contain) ||
+    !/^(none)?$/.test(cs.backdropFilter || "none") || /transform|filter|perspective/.test(cs.willChange);
+  function shownAcross(el, r = el.getBoundingClientRect()) {
+    let { left, right } = r, pos = getComputedStyle(el).position;
+    const root = document.documentElement, propagated = getComputedStyle(root).overflowX === "visible";  // (<body>'s clips the screen, see reach)
+    for (let e = up(el); e && e !== root && right - left >= 1; e = up(e)) {
+      const cs = getComputedStyle(e);
+      if (pos === "fixed" ? !holdsFixed(cs) : pos === "absolute" && cs.position === "static" && !holdsFixed(cs)) continue;
+      pos = cs.position;
+      if (cs.overflowX === "visible" || (e === document.body && propagated)) continue;
+      const b = e.getBoundingClientRect();
+      left = Math.max(left, b.left + (parseFloat(cs.borderLeftWidth) || 0));
+      right = Math.min(right, b.right - (parseFloat(cs.borderRightWidth) || 0));
+    }
+    return { left, right };
+  }
 
   const before = (a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
 
@@ -3151,6 +3444,9 @@
     return out;
   }
 
+  // Whether a box lays its lines out centered in it: its words, or the boxes of a flex row.
+  const centers = (cs) => (/flex/.test(cs.display) && !/column/.test(cs.flexDirection) ? /center|space-around|space-evenly/.test(cs.justifyContent) : /^(center|-webkit-center)$/.test(cs.textAlign));
+
   // Two of them on top of each other: across more than a sliver, and level by a good part of a line.
   const covers = (a, b) => Math.min(a.right, b.right) - Math.max(a.left, b.left) > 2 &&
     Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > Math.min(a.height, b.height) * 0.4;
@@ -3303,9 +3599,10 @@
   // comment, a notice of a line or two, a title in a list that wraps (held to a few lines, it shows fewer words). Left
   // as they are: a table's cells, code, a bar of links or buttons (they move by themselves, below), a short label at
   // the end of a row (a nickname, a time), which starts under the strip or is too short to be a line of words, words
-  // held on one line, which room would only cut shorter, and a box that would squeeze its pictures. With
-  // DuoWide-WideText on, the reader would rather have more words on a line: those on the right run on under the strip
-  // as pictures do, all but the ones around a link of theirs that it covers, which come in for the link to be pressed.
+  // held on one line, which room would only cut shorter, and a box that would squeeze its pictures. A box of pictures
+  // between paragraphs given room, in their column, comes in with them. With DuoWide-WideText on, the reader would
+  // rather have more words on a line: those on the right run on under the strip as pictures do, all but the ones around
+  // a link of theirs that it covers, which come in for the link to be pressed.
   // Returns the blocks of words it found, on one line and on several, and how it gives one room. With `below` (a height
   // in the window), only the blocks that start that far down or further, up to the screens a look covers ahead, so
   // that nothing that shows changes (see fitAhead).
@@ -3369,17 +3666,89 @@
     };
     // (Below what shows, nothing that shows moves: the page is not scrolled under a moving finger or a glide, which
     // Safari would stop.)
-    const anchor = lasting.size && below === null ? anchorNow() : null;
+    let anchor = lasting.size && below === null ? anchorNow() : null;
     for (const [block, nodes] of lasting) giveRoom(block, nodes, wide);
+    // Pictures in a column of words end where its words do. Its paragraphs given room, a picture between them ran on
+    // under the strip, and the column had two right edges, the picture's frame and caption past the words (namu.wiki's
+    // pictures, each in a bordered box with its caption: his screenshot, 11-03, "폭이 다름"). A box of pictures (a caption
+    // aside) in the flow beside paragraphs given room, as wide as they are from the same left, takes the same room, as
+    // on a narrower phone: its pictures smaller. A picture wider than the words (a banner across the page) runs on under
+    // the strip as before, as do pictures beside words that run on with DuoWide-WideText, and a player (see waits).
+    if (!wide) for (const [column, rows] of columnsOf()) {
+      for (const box of column.children) {
+        if (insets.has(box) || framed(box)) continue;
+        const r = box.getBoundingClientRect();
+        if (!onScreen(r) || !hidden(r.left, r.right) || (below !== null && r.top < below)) continue;
+        if (!rows.some((q) => Math.abs(q.left - r.left) < 1 && Math.abs(q.right - r.right) < 1) || !pictured(box, r) || !usable(box)) continue;
+        if (!anchor && below === null) anchor = anchorNow();
+        if (narrowed(box, r, need(r))) insets.set(box, []);
+      }
+    }
     keepAnchor(anchor);
     return { single, multi, giveRoom };
+  }
+
+  // The boxes holding paragraphs given room, each with the sides of those it holds (through any boxes around one that
+  // hold only it).
+  function columnsOf() {
+    const out = new Map();
+    for (const [b, nodes] of insets) {
+      if (!nodes.length || !b.isConnected) continue;
+      let w = b;
+      while (w.parentElement && w.parentElement !== document.body && w.parentElement.childElementCount === 1) w = w.parentElement;
+      if (!w.parentElement) continue;
+      if (!out.has(w.parentElement)) out.set(w.parentElement, []);
+      out.get(w.parentElement).push(w.getBoundingClientRect());
+    }
+    return out;
+  }
+  // Whether pictures fill most of a box (its caption aside), none of them a player.
+  const PICTURE = "img, canvas, svg";
+  const picturesIn = (box) => (box.matches(PICTURE) ? [box] : [...box.querySelectorAll(PICTURE)].filter((p) => !(p.parentElement && p.parentElement.closest("svg"))));
+  function pictured(box, r) {
+    if (box.matches(MEDIA) || box.querySelector(MEDIA)) return false;
+    const seen = new Set();
+    let area = 0;
+    for (const p of picturesIn(box)) {
+      const q = p.getBoundingClientRect(), w = Math.min(q.right, r.right) - Math.max(q.left, r.left), h = Math.min(q.bottom, r.bottom) - Math.max(q.top, r.top);
+      const at = [q.left, q.top, q.width, q.height].map(Math.round).join();
+      if (w <= 0 || h <= 0 || seen.has(at)) continue;  // (one laid over another, a picture over its placeholder, counts once)
+      seen.add(at);
+      area += w * h;
+    }
+    return area >= (r.width * r.height) / 2;
+  }
+  // A box narrowed by `px` on the strip's side (beside another window, on each side it reaches into a strip), its other
+  // side where it was: whether it took that, what it holds coming in with it and its pictures keeping their shape (those
+  // stretched to their boxes: one the page crops to its box or fits into it shows as it was, only less of it or smaller).
+  // (Its left margin is held, or a box the page centers would center in what is left: namu.wiki's did, its right side
+  // still under the strip.)
+  function narrowed(box, r, px) {
+    const cs = getComputedStyle(box), sides = Object.fromEntries(roomSides(r, px)), L = sides.left || 0, R = sides.right || 0;
+    if (L + R < 1) return false;
+    const pics = picturesIn(box), stretched = pics.filter((p) => p.localName !== "svg" && getComputedStyle(p).objectFit === "fill");
+    const shape = (p) => { const q = p.getBoundingClientRect(); return q.height ? q.width / q.height : 0; };
+    const shapes = stretched.map(shape);
+    const props = { "max-width": `${r.width - L - R - besides(cs)}px`, "margin-left": `${(parseFloat(cs.marginLeft) || 0) + L}px` };
+    for (const [k, v] of Object.entries(props)) setProp(box, k, v);
+    const a = box.getBoundingClientRect();
+    const within = (e) => { const q = e.getBoundingClientRect(); return q.width < 1 || (q.left >= a.left - 1 && q.right <= a.right + 1); };
+    if (Math.abs(a.left - (r.left + L)) < 1 && Math.abs(a.right - (r.right - R)) < 1 && [...pics, ...box.querySelectorAll("table")].every(within) &&
+      stretched.every((p, i) => !shapes[i] || Math.abs(shape(p) / shapes[i] - 1) < 0.02)) return true;
+    unsetProps(box, Object.keys(props));
+    return false;
   }
 
   function scanMovers(band, boxes) {
     const { lo, hi, min, max } = band, { right, both, toRight, onScreen, hidden, need, covered } = reach(band), full = max - min;
     const trace = dbg && dbg.trace ? (el, ...why) => dbg.trace.push([el, ...why]) : () => {};  // tests: why something stayed
-    for (const m of movers) unsetProps(m.el, Object.keys(m.props));
-    movers = [];
+    // A row that made room at the last look and has since grown taller than a row (see rowsOf) keeps that room while it
+    // stands so: Apple's nav bar stands as tall as the screen under the menu or search it opens over itself, its search
+    // and bag buttons hidden, and a look then gave the room back; closing it, they faded in under the strip and jumped
+    // over at the next look (his recordings, 11-02 and 11-03). Once a row again, it is looked at as any other.
+    const standing = movers.filter((m) => m.row && m.el.isConnected && m.el.getBoundingClientRect().height > 160);
+    for (const m of movers) if (!standing.includes(m)) unsetProps(m.el, Object.keys(m.props));
+    movers = standing;
     scanY = aheadY = scrollY;
     scanTops = new WeakMap();
     aheadTops = new WeakMap();
@@ -3398,15 +3767,21 @@
       if (frame !== el) fieldFrames.add(frame);
       return frame;
     };
+    // One a box around it cuts off where it reaches under the strip, so that what shows of it is clear of the strip (see
+    // shownAcross), is left as it is.
+    const cutOff = (el, r = el.getBoundingClientRect()) => {
+      const s = shownAcross(el, r);
+      return (s.left > r.left + 0.5 || s.right < r.right - 0.5) && !(s.right - s.left >= 1 && hidden(s.left, s.right));
+    };
     const stuckControl = (el) => {
       const r = el.getBoundingClientRect();
       // It is pressed on the part that shows, if that is as wide as the smallest button (a big one half under the strip,
       // a grid's last column, is pressed beside it) or most of a small one; a wide one shows its end (a row's ›, a
       // team's logo) under the strip with the words.
-      return onScreen(r) && (el.matches(FIELD) || fieldFrames.has(el) ? hidden(r.left, r.right) : covered(r));
+      return onScreen(r) && (el.matches(FIELD) || fieldFrames.has(el) ? hidden(r.left, r.right) : covered(r)) && !cutOff(el, r);
     };
     const visible = (el) => !(el.checkVisibility && !el.checkVisibility({ visibilityProperty: true }));
-    const usable = (el) => !inFixed(el, boxes) && !carouselOf(el) && visible(el);
+    const usable = (el) => !inFixed(el, boxes) && !carouselOf(el) && visible(el) && !cutOff(el);
 
     // Players first, as they may get shorter. One under the strip ends before it for good once it is pressed or plays
     // (see waits), its picture a little narrower, as on a phone without the strip: its full screen and sound buttons
@@ -3498,6 +3873,7 @@
       }
       return false;
     };
+    unseen = new Set();
     for (const el of [...document.querySelectorAll(CONTROL), ...iconButtons(band)]) {
       // Most are clear of the strip: that is the quickest thing to look at.
       if (!stuckControl(el)) continue;
@@ -3508,6 +3884,7 @@
       // on the folded screen, all but the one that said it was a button.
       const outer = el.parentElement && el.parentElement.closest(CONTROL);
       if (outer && (stuckControl(outer) || (!el.matches(ACTS) && el.parentElement.closest(PRESSED)))) { trace(el, "inside", outer); continue; }
+      if (!visible(el)) unseen.add(el);
       if (inText(el) || inFixed(el, boxes) || !visible(el)) {
         trace(el, inText(el) ? "in text" : inFixed(el, boxes) ? "in a fixed box" : "hidden");
         // A link in a sentence comes in with its lines: on the right, the words around it are given room after all.
@@ -3609,11 +3986,32 @@
     const wrapped = (row) => [...running].filter(([b]) => row.contains(b)).map(([b, n]) => [b, n, textBox(n, b), heldText(b) && !insets.has(b) ? b.getBoundingClientRect().height : 0]);
     const sameText = (t, u) => (!t && !u) || (t && u && t.lines === u.lines && Math.abs(t.left - u.left) < 1 && Math.abs(t.right - u.right) < 1);
     const unchanged = ([b, n, t, held]) => (held ? Math.abs(b.getBoundingClientRect().height - held) < 1 : sameText(textBox(n, b), t));
+    // Padding a row takes on the strip's side narrows what it holds: a box painting a color of its own that ran on under
+    // the strip ends before it, and what lies behind shows there beside it. DC's comments, white and pale blue rows on
+    // its gray, ended before the strip for good to bring their delete buttons in, the gray under the strip beside them
+    // (his screenshot and recording, 11-03). The boxes to watch: those the control sits in inside the row and the row's
+    // items, painted in a color other than what shows around the row, reaching under the strip; then, whether the room
+    // ended one of them before it. Such room waits for the control to slide over instead, and is taken only if it can't
+    // (see cutting). (A row that ends before the strip as a whole carries the colors at its end on under it, see
+    // narrowRoom.)
+    const colorsOf = (el, row) => {
+      let ground = "rgb(255, 255, 255)";
+      for (let a = row; a; a = a.parentElement) { const c = getComputedStyle(a).backgroundColor; if (painted(c)) { ground = c; break; } }
+      const out = [], take = (b) => {
+        const q = b.getBoundingClientRect(), c = getComputedStyle(b).backgroundColor;
+        if (painted(c) && c !== ground && onScreen(q) && hidden(q.left, q.right)) out.push(b);
+      };
+      for (let a = el.parentElement; a && a !== row; a = a.parentElement) take(a);
+      for (const c of [...row.children].slice(0, 200)) if (!c.contains(el)) take(c);
+      return out;
+    };
+    const cutShort = (colors) => colors.some((b) => { const q = b.getBoundingClientRect(); return !hidden(q.left, q.right); });
 
     // The nearest row that can make room does, if that moves the thing in and leaves the row's own box as it was (no
     // extra line, no growing past its edge), its running text as it was, and nothing in it squeezed on top of anything
     // else (words of a tab bar running into each other).
     const pads = [], padded = new Set(), lossy = new Map();  // lossy: a control -> room that would hide some of its row
+    const cutting = new Map();  // a control -> room that would only end some of its row's colors before the strip
     for (const el of items) {
       if (!stillStuck(el)) continue;  // a row made room for it already
       const parts = drawnOn(el);
@@ -3630,23 +4028,25 @@
         // (Words held to a few lines take new places under what is laid over their end: those are left out.)
         const held = kept.filter(([, , , h]) => h).map(([bl]) => bl), tall = held.length > 0 && seen.every((m) => m.kind !== "photo");
         const loose = (list) => list && list.filter((m) => !held.some((bl) => bl.contains(m.node)));
+        const colors = colorsOf(el, row);
         let done = false, behind = false;
         for (const narrow of [false, true]) {
           const tallToo = tall || (behind && seen.every((m) => m.kind !== "photo" || el.contains(m.node)));
           const room = makeRoom(row, px, true, false, narrow, tallToo);
           if (!room) { trace(el, "pad", row, narrow ? "can't narrow" : "row would change"); continue; }
           const now = marks(row, b.top, b.bottom);
-          const moved = Math.abs(edge(el, R) - was) > 0.5, same = kept.every(unchanged);
+          const moved = Math.abs(edge(el, R) - was) > 0.5, same = kept.every(unchanged), cut = !narrow && cutShort(colors);
           const fresh = now && worse(overlaps(loose(seen), null, true), overlaps(loose(now), null, true)), split = now && broken(loose(seen), loose(now)), small = now && shrunk(seen, now);
           const lost = now && gone(loose(seen), loose(now)), left = apart(el, parts);
           if (left) behind = true;
-          trace(el, "pad", row, narrow ? "narrowed" : "padded", moved ? "moved" : "not moved", same ? "" : "text rewrapped", split ? "words broken" : "", small ? "picture shrunk" : "", lost ? "gone from sight" : "", left ? "drawn apart" : "", now && (fresh ? "new overlap" : "no new overlap"), dbg && dbg.trace && now && fresh ? newPairs(seen, now, null, true) : "");
-          if (moved && same && now && !fresh && !split && !small && !lost && !left) {
+          trace(el, "pad", row, narrow ? "narrowed" : "padded", moved ? "moved" : "not moved", same ? "" : "text rewrapped", split ? "words broken" : "", small ? "picture shrunk" : "", lost ? "gone from sight" : "", left ? "drawn apart" : "", cut ? "colors cut short" : "", now && (fresh ? "new overlap" : "no new overlap"), dbg && dbg.trace && now && fresh ? newPairs(seen, now, null, true) : "");
+          if (moved && same && now && !fresh && !split && !small && !lost && !left && !cut) {
             pads.push({ el: row, ...room });
             padded.add(row);
             done = true;
             break;
           }
+          if (cut && moved && same && now && !fresh && !split && !small && !lost && !left && !cutting.has(el)) cutting.set(el, { row, props: room.props });
           if (moved && same && now && !fresh && !split && !small && !left && !lossy.has(el)) lossy.set(el, { row, again: () => makeRoom(row, need(row.getBoundingClientRect()), true, false, narrow, tallToo) });
           unsetProps(row, Object.keys(room.props));
         }
@@ -3697,36 +4097,77 @@
     // running text does: controls stay inside at every height, so this changes the page once, not while scrolling.
     // Running text level with it makes way too, its lines wrapping as they would on a narrower screen (a comment beside
     // its buttons: Naver Cafe's longer ones kept them under the strip); running text above or below it keeps its lines.
+    // Words level with the control that room for it would squeeze into a column much narrower than they had: onto two
+    // more lines at least, and twice as many or in under three fifths of the width. GitHub's chart cards lie two side
+    // by side, each with its title beside its buttons: room for the buttons of the one under the strip squeezed its
+    // title from two lines to five, a word to a line (his recording, 11-03: "저 버튼이 저렇게까지 ui를 해칠이유가 없기도
+    // 해서"). A comment beside its buttons, a few lines longer in a column still most as wide, is not. (A line of words
+    // is one mark of them, see marks.)
+    const squeezed = (before, after, c) => {
+      const lines = (list) => {
+        const n = new Map();
+        for (const m of list) if (m.kind === "text") { const s = n.get(m.node) || { lines: 0, width: 0 }; s.lines++; s.width = Math.max(s.width, m.q.width); n.set(m.node, s); }
+        return n;
+      };
+      const was = lines(before), now = lines(after);
+      const level = new Set(before.filter((m) => m.kind === "text" && Math.min(m.q.bottom, c.bottom) - Math.max(m.q.top, c.top) > 0).map((m) => m.node));
+      return [...level].some((n) => {
+        const a = was.get(n), b = now.get(n);
+        return !!b && b.lines >= a.lines + 2 && (b.lines >= 2 * a.lines || b.width < 0.6 * a.width);
+      });
+    };
     const forGood = (el) => {
       const parts = drawnOn(el), c = el.getBoundingClientRect();
       const level = ([bl]) => { const q = bl.getBoundingClientRect(); return Math.min(q.bottom, c.bottom) - Math.max(q.top, c.top) > 0; };
+      let tight = null;  // room that brings it in but squeezes the words level with it, taken if nothing better does
       for (const row of rowsOf(el, lo, hi, windowHeight())) {
         if (padded.has(row)) break;
         const b = row.getBoundingClientRect();
         const kept = wrapped(row).filter((k) => !level(k)), seen = marks(row, b.top, b.bottom);
         if (!seen) continue;
-        let room = makeRoom(row, need(b), false);
-        // A row of buttons held on one line (page numbers up to "next") may run onto a second one instead.
-        const rs = getComputedStyle(row);
-        if ((!room || stillStuck(el)) && /flex/.test(rs.display) && rs.flexWrap === "nowrap" && !/column/.test(rs.flexDirection)) {
-          if (room) unsetProps(row, Object.keys(room.props));
-          setProp(row, "flex-wrap", "wrap", "");
-          room = makeRoom(row, need(b), false);
-          if (room) room.props["flex-wrap"] = "wrap";
-          else unsetProps(row, ["flex-wrap"]);
+        const colors = colorsOf(el, row);
+        // Room alone first. A row laid out on one line by flex may run onto more lines instead: a row of buttons (page
+        // numbers up to "next") onto a second one where room alone leaves the last under the strip, and buttons beside
+        // words (a card's title) onto a line of their own under them where room alone would squeeze the words or break
+        // them, which keep their width. (A box around it may then do better still.)
+        const rs = getComputedStyle(row), runs = /flex/.test(rs.display) && rs.flexWrap === "nowrap" && !/column/.test(rs.flexDirection);
+        // Run on, the row needs only as much room as keeps what stays on its line where it ends now, clear of the
+        // strip: the buttons go under it. (The room it gives a control beside it keeps that one off the strip's edge.)
+        const rest = runs ? kidsOf(row).filter((k) => k.nodeType === Node.ELEMENT_NODE && !k.contains(el)).map((k) => k.getBoundingClientRect().right) : [];
+        const end = Math.max(...rest), inner = b.right - (parseFloat(rs.borderRightWidth) || 0) - (parseFloat(rs.paddingRight) || 0);
+        const runRoom = right && rest.length && end <= hi + 0.5 ? Math.max(0, inner - end) : need(b);
+        for (const run of runs ? [false, true] : [false]) {
+          if (run) setProp(row, "flex-wrap", "wrap", "");
+          const room = makeRoom(row, run ? runRoom : need(b), false);
+          if (!room) {
+            if (run) unsetProps(row, ["flex-wrap"]);
+            trace(el, "room for good", row, run ? "would not run on" : "row would change");
+            continue;
+          }
+          if (run) room.props["flex-wrap"] = "wrap";
+          const a = row.getBoundingClientRect(), now = marks(row, a.top, a.bottom), left = apart(el, parts), cut = cutShort(colors);
+          const stuck = stillStuck(el), narrow = !!now && squeezed(seen, now, c), split = !!now && broken(seen, now);
+          trace(el, "room for good", row, run ? "run onto more lines" : "", stuck ? "still stuck" : "in", kept.every(unchanged) ? "" : "text rewrapped", narrow ? "words squeezed" : "",
+            split ? "words broken" : "", now && shrunk(seen, now) ? "picture shrunk" : "", now && gone(seen, now) ? "gone from sight" : "", left ? "drawn apart" : "", cut ? "colors cut short" : "",
+            now ? (worse(overlaps(seen, null, true), overlaps(now, null, true)) ? "new overlap" : "no new overlap") : "too much to read");
+          const fits = !stuck && !left && kept.every(unchanged) && now && !split && !shrunk(seen, now) && !gone(seen, now) && !worse(overlaps(seen, null, true), overlaps(now, null, true));
+          if (fits && !cut && !narrow) {
+            insets.set(row, []);
+            roomed.set(row, room.props);
+            return true;
+          }
+          if (fits && !cut && !tight) tight = { row, props: room.props };
+          if (fits && !cutting.has(el)) cutting.set(el, { row, props: room.props, good: true });
+          unsetProps(row, Object.keys(room.props));
+          if (!stuck && !narrow && !split) break;  // (in, the words whole and about as wide as they were: running on is no help)
         }
-        if (!room) { trace(el, "room for good", row, "row would change"); continue; }
-        const a = row.getBoundingClientRect(), now = marks(row, a.top, a.bottom), left = apart(el, parts);
-        trace(el, "room for good", row, stillStuck(el) ? "still stuck" : "in", kept.every(unchanged) ? "" : "text rewrapped",
-          now && broken(seen, now) ? "words broken" : "", now && shrunk(seen, now) ? "picture shrunk" : "", now && gone(seen, now) ? "gone from sight" : "", left ? "drawn apart" : "",
-          now ? (worse(overlaps(seen, null, true), overlaps(now, null, true)) ? "new overlap" : "no new overlap") : "too much to read");
-        if (!stillStuck(el) && !left && kept.every(unchanged) && now && !broken(seen, now) && !shrunk(seen, now) && !gone(seen, now) && !worse(overlaps(seen, null, true), overlaps(now, null, true))) {
-          insets.set(row, []);
-          return true;
-        }
-        unsetProps(row, Object.keys(room.props));
       }
-      return false;
+      if (!tight) return false;
+      for (const [p, v] of Object.entries(tight.props)) setProp(tight.row, p, v, "");
+      trace(el, "room for good", tight.row, "words squeezed, taken: nothing better");
+      insets.set(tight.row, []);
+      roomed.set(tight.row, tight.props);
+      return true;
     };
     let held = anchorNow(), grew = false;
     for (const el of items) if (stillStuck(el) && !alike.has(el) && forGood(el)) grew = true;
@@ -3734,6 +4175,34 @@
 
     // What still sits under the strip slides over with its group, so icons that sit together keep their places.
     const groups = new Set(items.filter(stillStuck).map((el) => groupOf(el, lo, hi, full)));
+    const slideOf = (r) => (r.right > hi ? hi - r.right - margin(r) : r.left < lo ? lo - r.left + margin(r) : 0);
+    // Groups side by side on one line in one box, with no narrow box of their own around them, slide over as far as the
+    // one of them that goes furthest, so they keep their places beside each other as well: Inven's power and menu icons,
+    // placed one by one against the end of its dark header, each slid only as far as it had to, the menu onto the power
+    // button, and stayed under the strip once the header no longer ended before the strip to bring them in (11-03, see
+    // colorsOf).
+    // A group lying partly past the screen's end lies in a panel slid out of sight (a carousel's slide beside the one
+    // shown, a menu kept off the screen): slid over, it would come into sight over what the screen shows. It keeps its
+    // place, and doesn't set how far the ones beside it go. (Inven's search box, on the slide swiped away beside
+    // another window, slid on onto the slide shown with its button: 11-03, before the slide was cut off at the middle,
+    // see cutAtMiddle.)
+    const away = (r) => r.left < min - 0.5 || r.right > max + 0.5;
+    const together = new Map();  // a group -> how far it slides with those beside it
+    const placed = [...groups].map((g) => { const r = g.getBoundingClientRect(); return { g, r, dx: slideOf(r) }; }).filter((p) => !away(p.r));
+    const beside = (a, b) => a.g.parentElement === b.g.parentElement && Math.abs(a.dx) >= 0.5 && Math.sign(a.dx) === Math.sign(b.dx) &&
+      Math.max(a.r.left, b.r.left) - Math.min(a.r.right, b.r.right) < pt(TAP) &&
+      Math.min(a.r.bottom, b.r.bottom) - Math.max(a.r.top, b.r.top) >= 0.6 * Math.min(a.r.height, b.r.height);
+    const runs = new Map(placed.map((p) => [p, [p]]));
+    for (const a of placed) for (const b of placed) {
+      if (runs.get(a) === runs.get(b) || !beside(a, b)) continue;
+      const run = [...runs.get(a), ...runs.get(b)];
+      for (const p of run) runs.set(p, run);
+    }
+    for (const run of new Set(runs.values())) {
+      if (run.length < 2) continue;
+      const far = run.reduce((f, p) => (Math.abs(p.dx) > Math.abs(f) ? p.dx : f), 0);
+      for (const p of run) together.set(p.g, far);
+    }
     // A group may only land where it covers nothing it did not cover before: no title under an icon, no tab on top of
     // the next tab, no card of a carousel on top of the one beside it. Where it would, the row around it may slide
     // over whole instead; otherwise it keeps its place. Each one is checked with those before it in place.
@@ -3775,12 +4244,15 @@
         const r = g.getBoundingClientRect();
         // (A carousel's tall side arrow is narrow, and placed by itself: it moves like any button.)
         if (r.height > 160 && !(r.width <= 64 && /absolute|fixed/.test(cs.position))) { trace(g0, "shift", g, "too tall"); break; }
-        const dx = r.right > hi ? hi - r.right - margin(r) : r.left < lo ? lo - r.left + margin(r) : 0;
+        if (away(r)) { trace(g0, "shift", g, "past the screen's end"); break; }
+        const dx = g === g0 && together.has(g0) ? together.get(g0) : slideOf(r);
         if (Math.abs(dx) < 0.5) break;
         // too wide to fit beside the strip: it keeps its place
         if (r.left + dx < lo - 0.5 || r.right + dx > hi + 0.5) { trace(g0, "shift", g, "too wide"); break; }
         const clip = clipOf(g);  // nor may it slide out of a card that would cut it off
         if (clip && (r.left + dx < clip.left - 0.5 || r.right + dx > clip.right + 0.5)) { trace(g0, "shift", g, "clipped"); break; }
+        const card = cardOf(g);  // or out of the one drawn around it
+        if (card && (r.left + dx < card.left - 0.5 || r.right + dx > card.right + 0.5)) { trace(g0, "shift", g, "out of its card"); break; }
         if (cell && (r.left + dx < cellBox.left - 0.5 || r.right + dx > cellBox.right + 0.5)) { trace(g0, "shift", g, "out of its cell"); break; }
         // What it might land on: the nearest box around it that spans the way it would go, and all of its height (an
         // icon that hangs below its row reaches the next one). Not words around it: their box takes in all the lines
@@ -3814,6 +4286,9 @@
             const p = m.node, pr = m.q, ps = getComputedStyle(p);
             if (pr.width > 3 * Math.max(q.width, pt(TAP)) || pr.height > 2 * q.height + 8 || ps.translate !== "none" || !covers(q, pr)) continue;
             if (Math.min(pr.bottom, q.bottom) - Math.max(pr.top, q.top) < 0.6 * Math.min(pr.height, q.height)) continue;  // not on its line
+            // (Nor one it only lands on, apart from it before: Inven's ▲ took the last of the links in a line of its footer
+            // along with it, onto the next.)
+            if (Math.max(r.left - pr.right, pr.left - r.right) > pt(TAP) / 2) continue;
             if (pr.left + dx < Math.max(lo, sb.left) - 0.5 || pr.right + dx > Math.min(hi, sb.right) + 0.5) continue;
             const s = shiftOf(p, ps, dx);
             for (const [k, v] of Object.entries(s.props)) setProp(p, k, v, "");
@@ -3826,7 +4301,11 @@
         // another line).
         const made = [];
         if (now && (laid || worse(overlaps(seen, unit), overlaps(now, unit)))) {
-          const inside = now.filter((m) => unit.contains(m.node) && m.kind !== "tap");
+          // (What of it covers them: its words and icons, and its box where that is drawn, as a button's square around
+          // its ▲ is.)
+          const boxed = painted(cs.backgroundColor) || cs.backgroundImage !== "none" ||
+            ["Top", "Right", "Bottom", "Left"].some((k) => parseFloat(cs[`border${k}Width`]) > 0 && painted(cs[`border${k}Color`]));
+          const inside = [...now.filter((m) => unit.contains(m.node) && m.kind !== "tap"), ...(boxed ? [{ q: g.getBoundingClientRect() }] : [])];
           const R = both ? dx < 0 : right;  // (beside another window, it came in from the strip it slid away from)
           const edgeOf = R ? Math.min(...inside.map((m) => m.q.left)) - 4 : Math.max(...inside.map((m) => m.q.right)) + 4;
           for (const m of now) {
@@ -3838,6 +4317,26 @@
             };
             if (!hit()) continue;  // a box that made way already moved it
             let done = false;
+            // Centered words make way all together: the outermost box around them that centers its lines (no taller
+            // than half the window, nor holding what slides) gives up twice what they reach past the place, for half of
+            // that moves them, and its lines stay centered on one another (Inven's footer, its links centered in lines
+            // across the page, its ▲ under the strip at their end: his request, 11-03).
+            let c = null;
+            for (let b = m.node.parentElement; b && b !== document.body && !b.contains(g) && !along.some((a) => b.contains(a.el)); b = b.parentElement) {
+              const bs = getComputedStyle(b);
+              if (/^(inline|contents)$/.test(bs.display)) continue;
+              if (!centers(bs) || b.getBoundingClientRect().height > windowHeight() / 2) break;
+              c = b;
+            }
+            if (c) {
+              const rg = document.createRange();
+              rg.selectNodeContents(m.node);
+              const qs = [...rg.getClientRects()].filter((q) => inside.some((i) => covers(i.q, q)));
+              const px = Math.ceil(2 * (R ? Math.max(...qs.map((q) => q.right)) - edgeOf : edgeOf - Math.min(...qs.map((q) => q.left))));
+              const room = px >= 1 && px <= strip.gap + pt(TAP) && makeRoom(c, px, true, false, false, false, R ? "right" : "left");
+              if (room && !hit()) { made.push({ el: c, ...room }); done = true; }
+              else if (room) unsetProps(c, Object.keys(room.props));
+            }
             for (let b = m.node.parentElement, tries = 0; b && b !== document.body && !b.contains(g) && !along.some((a) => b.contains(a.el)) && tries < 4 && !done; b = b.parentElement) {
               const bs = getComputedStyle(b);
               if (/^(inline|contents)$/.test(bs.display)) continue;
@@ -3885,6 +4384,27 @@
       padded.add(pad.el);
     }
     if (grew) keepAnchor(held);
+    // Room that ends some of its row's colors before the strip (see colorsOf) is taken after all for a control that could
+    // not slide over: it can be pressed, the colors ending as they did before they were watched. What slid over inside
+    // that room gives its place back, the room bringing it in as well (it would move twice), or the room isn't taken.
+    held = anchorNow();
+    grew = false;
+    for (const [el, { row, props, good }] of cutting) {
+      if (!stillStuck(el) || padded.has(row) || insets.has(row)) continue;
+      const inner = shifts.filter((s) => row.contains(s.el)), made = pads.filter((m) => m.by && inner.some((s) => s.el === m.by));
+      for (const s of [...inner, ...made]) unsetProps(s.el, Object.keys(s.props));
+      for (const [p, v] of Object.entries(props)) setProp(row, p, v, "");
+      if (stillStuck(el) || inner.some((s) => [s.el, ...s.el.querySelectorAll(CONTROL)].some((c) => c.matches(CONTROL) && stuckControl(c)))) {
+        unsetProps(row, Object.keys(props));
+        for (const s of [...inner, ...made]) for (const [p, v] of Object.entries(s.props)) setProp(s.el, p, v, "");
+        continue;
+      }
+      for (const s of [...inner, ...made]) { const list = s.by ? pads : shifts; list.splice(list.indexOf(s), 1); }
+      trace(el, good ? "room for good" : "pad", row, "colors cut short, taken: it can't slide over");
+      if (good) { insets.set(row, []); roomed.set(row, props); grew = true; }
+      else { pads.push({ el: row, props }); padded.add(row); }
+    }
+    if (grew) keepAnchor(held);
     // Room that hides some of its row (see gone) is the last resort, for a control nothing else brought in: the page
     // itself hides those on a phone that narrow, and the control can be pressed.
     for (const [el, { row, again }] of lossy) {
@@ -3894,6 +4414,42 @@
       trace(el, "pad", row, "hiding some of it: nothing else brings it in");
       pads.push({ el: row, ...room });
       padded.add(row);
+    }
+    // Room is made once on the way in from the strip. A row that made room for one control may lie inside a box that
+    // made room for another after it (Apple's nav bar: its list of links padded for the bag, then the bar holding the
+    // list ended before the strip for the menu button laid against the bar's end), and what is in the row then moves
+    // twice, by its own room and the box's: the search and bag buttons landed a strip's width short of the menu button
+    // (his recording, 11-02). Such a row gives its room back if what it brought in stays in with the box's room alone,
+    // its words as they were, and nothing in it lands on anything else or goes.
+    for (const m of [...pads]) {
+      if (m.by || !pads.some((o) => o !== m && !o.by && o.el !== m.el && o.el.contains(m.el))) continue;
+      const b = m.el.getBoundingClientRect(), seen = marks(m.el, b.top, b.bottom), kept = wrapped(m.el);
+      if (!seen) continue;
+      const inside = items.filter((el) => m.el.contains(el) && !stillStuck(el));
+      unsetProps(m.el, Object.keys(m.props));
+      const a = m.el.getBoundingClientRect(), now = marks(m.el, a.top, a.bottom);
+      const back = !!now && inside.every((el) => !stillStuck(el)) && kept.every(unchanged) && !worse(overlaps(seen, null, true), overlaps(now, null, true)) &&
+        !broken(seen, now) && !shrunk(seen, now) && !gone(seen, now);
+      trace(m.el, "pad", m.el, back ? "given back: a box around it made room" : "kept: a box around it made room, not enough");
+      if (back) { pads.splice(pads.indexOf(m), 1); padded.delete(m.el); continue; }
+      for (const [p, v] of Object.entries(m.props)) setProp(m.el, p, v, "");
+    }
+    // So does a row given room for good at an earlier look, while the box around it was no row to make room: Apple's
+    // list of links stood tall under the search opened over the bar, its bag button still fading out, and once the bar
+    // was a row again the buttons moved twice for good. (Only if it stays as tall: the page around it would move.)
+    for (const [row, props] of [...roomed]) {
+      if (!row.isConnected) { roomed.delete(row); continue; }
+      if (!pads.some((o) => !o.by && o.el !== row && o.el.contains(row))) continue;
+      const b = row.getBoundingClientRect(), seen = marks(row, b.top, b.bottom), kept = wrapped(row);
+      if (!seen) continue;
+      const inside = [...row.querySelectorAll(CONTROL)].filter((el) => !stuckControl(el));
+      unsetProps(row, Object.keys(props));
+      const a = row.getBoundingClientRect(), now = marks(row, a.top, a.bottom);
+      const back = !!now && Math.abs(a.height - b.height) < 1 && inside.every((el) => !stuckControl(el)) && kept.every(unchanged) &&
+        !worse(overlaps(seen, null, true), overlaps(now, null, true)) && !broken(seen, now) && !shrunk(seen, now) && !gone(seen, now);
+      trace(row, "room for good", row, back ? "given back: a box around it made room" : "kept: a box around it made room, not enough");
+      if (back) { insets.delete(row); roomed.delete(row); continue; }
+      for (const [p, v] of Object.entries(props)) setProp(row, p, v, "");
     }
     for (const m of shifts) unsetProps(m.el, Object.keys(m.props));
 
@@ -3905,7 +4461,6 @@
     // services room at its start while the row lay past the screen's left end, its panel sliding in, and the row kept a
     // strip's width of space before its first link.)
     for (const m of pads) if (m.by) unsetProps(m.el, Object.keys(m.props));
-    const away = (b) => b.left < min - 0.5 || b.right > max + 0.5;
     // (Beside another window, at either end that lies under a strip.)
     const endsOf = (b) => (both ? [true, false] : [right]).map((R) => [R, Math.min(strip.gap, R ? b.right - hi : lo - b.left)]).filter(([, px]) => px >= 1);
     for (const [c, { want, props }] of [...ends]) {
@@ -3936,7 +4491,7 @@
     const rows = pads.filter((m) => !shifts.some((s) => s.el.contains(m.el)));
     for (const m of [...rows, ...shifts]) {
       for (const [p, v] of Object.entries(m.props)) setProp(m.el, p, v, "");
-      movers.push({ el: m.el, props: m.props });
+      movers.push({ el: m.el, props: m.props, row: rows.includes(m) && !m.by });
     }
   }
 
@@ -3968,6 +4523,14 @@
   };
   // A finger on the page, or the page still gliding.
   const moving = () => touching || performance.now() - lastScroll < 250;
+  // A control the last look found hidden under the strip, shown again as the page changes, has the page looked over at
+  // once, before Safari draws it: what the page showed in its place meanwhile had room of its own, or none. (Not as a
+  // transition of its style starts: Apple's bar was then still half its menu, and the look gave its buttons room that
+  // left the menu button under the strip for a second.)
+  function seenAgain() {
+    if (!strip || !unseen.size || ![...unseen].some((el) => el.isConnected && !(el.checkVisibility && !el.checkVisibility({ visibilityProperty: true })))) return;
+    if (moving()) refixAllSoon(); else refix(true);
+  }
   // How far down the window what shows ends, and a little more: Safari's bars, laid over the page, may grow back or
   // shrink away as it scrolls.
   const belowShown = () => Math.max(windowHeight(), window.visualViewport ? visualViewport.offsetTop + visualViewport.height : 0) + windowHeight() / 4;
@@ -4031,6 +4594,43 @@
     });
   }
 
+  // Boxes that come in once the page has been looked at, laid out under the strip where they show, have it looked over
+  // in the frame they come in, before Safari draws them, when it is still: what the page's script puts in once it has
+  // fetched it. Inven's home drew its loading screen first and its menu of games 1.8 seconds later, its last column under
+  // the strip for a third of a second, until the look (his recording, 11-03: "인벤 오른쪽 위 딜레이"). A box no wider
+  // than half the middle reaching under the strip, a column, a button, a card; a wider one, a row whose background runs
+  // on under the strip, is looked into. (All that came in a frame at once, and once a second at most, as the looks it
+  // would wait for (see refixAllSoon): a page that keeps putting boxes in, its ticker or its ads, isn't looked over in
+  // every frame. Less often while the looks leave those boxes where they were, the next cards of a row that runs on
+  // under the strip.)
+  const cameIn = new Set();
+  let cameFrame = 0, cameLook = -Infinity, cameWait = 1000;
+  function lookAtNew(nodes) {
+    for (const n of nodes) if (n.nodeType === Node.ELEMENT_NODE && !n.hasAttribute(MARK)) cameIn.add(n);
+    if (cameFrame || !cameIn.size) return;
+    cameFrame = requestAnimationFrame(() => {
+      cameFrame = 0;
+      const came = [...cameIn];
+      cameIn.clear();
+      if (!strip || !document.body || passing() || moving() || performance.now() - cameLook < cameWait) return;
+      const band = clearBand(), right = strip.side !== "left", left = strip.side !== "right", half = (band.hi - band.lo) / 2;
+      const shows = (q) => q.width >= 1 && q.height >= 1 && q.bottom > 0 && q.top < windowHeight();
+      const reaches = (q) => (right && q.right > band.hi + 1) || (left && q.left < band.lo - 1);
+      const found = [], queue = came.filter((e) => e.isConnected);
+      for (let i = 0; i < queue.length && i < 300 && found.length < 8; i++) {
+        const q = queue[i].getBoundingClientRect();
+        if (!shows(q) || !reaches(q)) continue;
+        if (q.width < half) found.push(queue[i]);
+        else for (const c of queue[i].children) if (!c.hasAttribute(MARK)) queue.push(c);
+      }
+      if (!found.length) return;
+      cameLook = performance.now();
+      refix(true);
+      const moved = found.some((e) => { const q = e.getBoundingClientRect(); return !e.isConnected || !shows(q) || !reaches(q); });
+      cameWait = moved ? 1000 : Math.min(cameWait * 2, 16000);
+    });
+  }
+
   function watch() {
     // A bar or notice that was there all along may show by a switched class or style (a cookie notice fading in, a
     // "back to top" button once the page has scrolled): the bars are fitted again shortly after, not while a finger or
@@ -4066,10 +4666,11 @@
         topEdge();
       }
       if (records.some((rec) => [...rec.addedNodes].some((n) => n.nodeName === "STYLE") || [...rec.removedNodes].some((n) => /^(STYLE|LINK)$/.test(n.nodeName)))) wholeScreen();
+      seenAgain();
       // Words alone bring no new boxes, bars or players to look over (a clock's digits written anew every second had the
       // whole page looked over every second): their lines are fitted as they come (see fitLinesSoon).
       const added = records.flatMap((rec) => [...rec.addedNodes]);
-      if (added.some((n) => n.nodeType === Node.ELEMENT_NODE)) refixAllSoon();
+      if (added.some((n) => n.nodeType === Node.ELEMENT_NODE)) { lookAtNew(added); refixAllSoon(); }
       if (added.length) fitLinesSoon(added);
       if (strip.side === "both") fitLinesSoon([], records.filter((rec) => rec.type === "attributes").map((rec) => rec.target));  // (a box shown or restyled, see frameIn)
       if (!records.some((rec) => rec.type === "attributes")) return;
@@ -4237,7 +4838,7 @@
     // A page Safari loaded ahead while its address was typed, or kept from before, shows without loading again and may
     // have been laid out at another size: it is looked at again when it shows. Web fonts that arrive after the page was
     // looked over change how wide its words are. A page that slept while hidden is widened again (see sleep).
-    const shows = () => { if (document.visibilityState !== "visible") return; asleep = false; consider(); if (strip) settle(); };
+    const shows = () => { if (document.visibilityState !== "visible") return; asleep = false; if (strip && !byReader && zoomed()) unzoom(); consider(); if (strip) settle(); };
     // (A finger still down as Safari went to the background is never seen to lift: the page would stay where it slid.)
     document.addEventListener("visibilitychange", () => { touching = false; barUntil = 0; if (document.visibilityState === "hidden") sleep(); });
     document.addEventListener("visibilitychange", shows);
@@ -4250,7 +4851,7 @@
     // (see sleep). Safari's page zoom moving to another step can look like a zoom for a moment, the scale changed
     // before the part shown, and is no reader's.
     let zoomedIn = zoomed();
-    if (zoomedIn) scaled = true;
+    if (zoomedIn) scaled = byReader = true;
     if (window.visualViewport) visualViewport.addEventListener("resize", () => {
       noteShape();
       // The keyboard coming up for a field focused for a tap, or going down (see steer).
@@ -4271,9 +4872,11 @@
       else if (orig === null && !zoomed()) consider();
       if (zoomed() === zoomedIn) return;
       zoomedIn = !zoomedIn;
+      byReader = zoomedIn && (touching || performance.now() - touchedAt < 1500);
       if (!zoomedIn) { consider(); if (strip) settle(); }
-      else if (touching || performance.now() - touchedAt < 1500) scaled = true;
+      else if (byReader) scaled = true;
       else if (strip && strip.side === "both") { zoomedIn = false; afresh(); }  // (Safari settling a window beside another after all, see heldStill)
+      else if (strip) unzoom();  // (WebKit's, see unzoom)
     });
     // Safari slides the page to a field that takes the keyboard (see revealing); it glides back once that is over.
     addEventListener("focusin", (e) => {
@@ -4288,7 +4891,7 @@
     let tap = null;
     addEventListener("touchstart", (e) => {
       const target = e.composedPath()[0];  // (in a page's own shadow tree, the field itself)
-      tap = strip && e.touches.length === 1 && !e.defaultPrevented && performance.now() - lastScroll > 120 ? { x: e.touches[0].clientX, y: e.touches[0].clientY, at: e.timeStamp, target, was: deepActive() } : null;
+      tap = strip && e.touches.length === 1 && !e.defaultPrevented && performance.now() - lastScroll > 120 ? { x: e.touches[0].clientX, y: e.touches[0].clientY, at: e.timeStamp, target, was: deepActive(), keys: keyboardUp() } : null;
     }, { passive: true });
     addEventListener("touchmove", (e) => {
       if (tap && (e.touches.length !== 1 || Math.hypot(e.touches[0].clientX - tap.x, e.touches[0].clientY - tap.y) > pt(10))) tap = null;
@@ -4298,9 +4901,11 @@
       const t = tap;
       tap = null;
       tapUp = t && !e.touches.length && !e.defaultPrevented && e.timeStamp - t.at < 500 ? { ...t, end: performance.now() } : null;
+      if (tapUp) tapped = tapUp;
     }, { passive: true });
     addEventListener("mouseup", steer, true);
     addEventListener("click", (e) => { steer(e); tapUp = null; });
+    addEventListener("focusin", steerFocused);
     // Left for something that takes no keyboard, with no resize to tell the keyboard went (one on its own): the room
     // below the page goes all the same.
     addEventListener("focusout", (e) => {
@@ -4310,8 +4915,14 @@
     });
   }
 
-  async function start() {
-    stripPhone = (await store.get("stripPhone", false)) === true;
+  // Userscripts runs this script only once its extension has asked its app for the page's scripts (read from their
+  // folder for every page), and Safari may draw the page at its own width before then: Clien's posts showed their dark
+  // header ending before the strip, white under it, for 0.1 to 1 second after they came (his recording, 11-03). The
+  // script then waited for the store as well before it looked at the page. It looks at once now: only a page turned
+  // sideways waits for what the store keeps (see detect).
+  function start() {
+    stripKept = store.get("stripPhone", false).then((v) => v === true, () => false);
+    stripKept.then((kept) => { if (kept && !stripPhone) { stripPhone = true; consider(); } });
     const begin = () => { wholeScreen(); watch(); shapeSeen = shapeNow(); consider(); };  // (our sheet first: it gives 100vw to read)
     if (!document.documentElement) {
       new MutationObserver((_, obs) => { if (document.documentElement) { obs.disconnect(); begin(); } }).observe(document, { childList: true });
@@ -4319,6 +4930,7 @@
   }
 
   if (dbg) dbg.refix = () => refix(true);
+  if (dbg) dbg.showBar = () => showBar();  // (tests: the scroll bar as a reader's scroll shows it, see test/strip-color.swift)
   if (dbg) dbg.state = () => ({ orig, ours, own: !!own, strip, stripPhone, yielded, scaled, asleep, rewrites: rewrites.length, others: others.size, edge: !!(edge && edge.isConnected), edgeOver: lifted.size, bar: document.documentElement.hasAttribute(BAR), fixed: fixed.size, movers: movers.length, insets: insets.size, content: meta?.getAttribute("content") || null,
     keepers: keepers.size, handed: handed.size, framed: document.documentElement.hasAttribute(FRAME), unframed, shift, moved: moved.size, standIns: standIns.size });
   if (dbg) dbg.keepers = () => [...keepers].map((e) => e.id || e.localName + (typeof e.className === "string" && e.className ? "." + e.className.trim().split(/\s+/)[0] : ""));
