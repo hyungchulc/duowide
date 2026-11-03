@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DuoWide
 // @namespace    https://github.com/hyungchulc/duowide
-// @version      2.0.7
+// @version      2.0.8
 // @description  Lets web pages use the whole iPhone Duo outer screen in Safari, under the side strip, and keeps what you tap clear of the strip.
 // @author       hyungchulc
 // @homepageURL  https://github.com/hyungchulc/duowide
@@ -1009,6 +1009,7 @@
       if ("touch-action" in (fixed.get(root) || {})) unsetProps(root, ["touch-action"]);
       for (const el of holds) unsetProps(el, ["touch-action"]);
       holds.clear();
+      rowsHeld.clear();
       for (const el of contained) unsetProps(el, ["overscroll-behavior-x"]);
       contained.clear();
       holdFrames(false);
@@ -1346,23 +1347,43 @@
   // WebKit starts a touch's touch-action afresh in a box that scrolls by itself (overflow auto or scroll), whether or
   // not it has anything to scroll: the page's setting above doesn't reach a touch that lands in one, and a sideways
   // drag there slides the whole page by the strip's width, its scroll bar showing along the bottom (a wiki's tables,
-  // each in a box of its own). One that can't scroll sideways itself gets the page's setting too, and still scrolls up
-  // and down; one that can keeps its own, and loses ours once it can. One that can hands a drag past its end on to the
-  // page (WebKit has a box pass on what it can't scroll while its overscroll-behavior is auto), which slid it just the
-  // same: it keeps that to itself (contain), and hands it on again once it can't. (Not the body, whose scrolling may be
-  // the page's own.) A few screens around this one, as a look does, and as the page scrolls on, those it goes toward
-  // (see holdSoon).
+  // each in a box of its own). Each such box gets the page's setting too, and still scrolls up and down. One that
+  // scrolls sideways as well then can't be scrolled that way by the browser: it is scrolled here, under the finger, and
+  // glides on and comes to rest as the browser would have it (see drag). Left to the browser, a row of cards slid the
+  // page with any touch that came down on it, up or down as well as across: by as far as the finger drifted sideways,
+  // and when flicked up or down, by all of the strip's width and on past it, the middle under the strip on one side and
+  // the page's edge showing on the other until it was still again (his recording, 11-03 18:32, Amazon's home beside
+  // another window: for four seconds at a time as he went on scrolling). One that scrolls sideways hands a drag past
+  // its end on to the page (WebKit has a box pass on what it can't scroll while its overscroll-behavior is auto), which
+  // slid it just the same: it keeps that to itself (contain). (Not the body, whose scrolling may be the page's own.) A
+  // few screens around this one, as a look does, and as the page scrolls on, those it goes toward (see holdSoon).
+  // One laid in a box that scrolls sideways by a setting of the page's own (pan-x) is left as it is too: a sideways
+  // drag on it goes to that box, not to the page. Given the page's setting, a card in a row of cards that scrolls by
+  // itself (Amazon's cards of four products, overflow auto) took no sideways drag at all, and the row stopped under the
+  // finger whenever one of them was in the middle (his recording, 11-03: "40초 이후에는 내가 스크롤을해도 캐러셀이
+  // 안넘어감").
   const holds = new Set();  // boxes given the page's touch-action
   const contained = new Set();  // boxes that scroll sideways, kept from handing a drag on
+  const rowsHeld = new Set();  // boxes given it that scroll sideways: scrolled that way here (see drag)
   let flat = new WeakSet();  // boxes seen not to scroll by themselves: not looked at again
   const sideways = (el, cs) => /auto|scroll/.test(cs.overflowX) && el.scrollWidth > el.clientWidth + 1;
+  // (Up to one fixed on the screen: what scrolls under it is the page.)
+  const inSideways = (el) => {
+    for (let a = el; a && a !== document.body && a !== document.documentElement; a = a.parentElement) {
+      const cs = getComputedStyle(a);
+      if (a !== el && sideways(a, cs) && !rowsHeld.has(a)) return true;
+      if (cs.position === "fixed") return false;
+    }
+    return false;
+  };
   let holdY = 0;  // scrollY as the boxes around it were last held
   function holdBoxes(span = [-1, 3]) {
     holdY = scrollY;
     for (const el of holds) {
-      if (el.isConnected && !sideways(el, getComputedStyle(el))) continue;
+      if (el.isConnected && !inSideways(el) && !(el === document.body && sideways(el, getComputedStyle(el)))) continue;
       unsetProps(el, ["touch-action"]);
       holds.delete(el);
+      rowsHeld.delete(el);
     }
     for (const el of contained) {
       if (el.isConnected && sideways(el, getComputedStyle(el))) continue;
@@ -1371,15 +1392,23 @@
     }
     if (!document.body || wide || zoomed()) return;
     holdFrames(true);
+    const contain = (el, cs) => { if (!contained.has(el) && cs.overscrollBehaviorX === "auto") { setProp(el, "overscroll-behavior-x", "contain"); contained.add(el); } };
     const holdIf = (el, cs) => {
       if (!/auto|scroll/.test(cs.overflowX + cs.overflowY)) return;
-      if (sideways(el, cs)) {
-        if (el !== document.body && cs.overscrollBehaviorX === "auto") { setProp(el, "overscroll-behavior-x", "contain"); contained.add(el); }
-        return;
-      }
-      if (!/^(auto|manipulation)$/.test(cs.touchAction)) return;
+      const across = sideways(el, cs);
+      if (across && el === document.body) return;
+      if (across) contain(el, cs);
+      if (!/^(auto|manipulation)$/.test(cs.touchAction) || inSideways(el)) return;
       setProp(el, "touch-action", HOLD);  // (over a sheet that puts every part of a notice back to auto, important and all)
       holds.add(el);
+      if (across) rowsHeld.add(el);
+    };
+    // (One held, counted again: it may have come to scroll sideways since, or no longer do.)
+    const recount = (el) => {
+      const cs = getComputedStyle(el);
+      if (!sideways(el, cs) || el === document.body) { rowsHeld.delete(el); return; }
+      contain(el, cs);
+      rowsHeld.add(el);
     };
     // The body as well, looked at every time (a menu that opens holds the page still by its body's overflow): a page
     // that cuts its body off sideways (overflow-x hidden) has it scroll up and down by itself as WebKit counts, though
@@ -1397,7 +1426,8 @@
       },
     });
     for (let el = walker.nextNode(); el; el = walker.nextNode()) {
-      if (holds.has(el) || contained.has(el) || flat.has(el)) continue;
+      if (holds.has(el)) { recount(el); continue; }
+      if (contained.has(el) || flat.has(el)) continue;
       // (Words and links laid in lines have no box of their own to scroll: most of a page, passed over unread.)
       if (!el.clientHeight || !el.clientWidth) continue;
       const cs = getComputedStyle(el);
@@ -1493,6 +1523,7 @@
     movers = [];
     bars.clear();
     holds.clear();
+    rowsHeld.clear();
     contained.clear();
     holdFrames(false);
     flat = new WeakSet();
@@ -2120,7 +2151,7 @@
   const framed = (e) => keepers.has(e) || handed.has(e);
   const EDGE_PROPS = ["border-image-source", "border-image-slice", "border-image-width", "border-image-outset", "border-image-repeat"];
   const FRAME_PROPS = ["padding-left", "padding-right", "box-sizing", "border-left-width", "border-left-style", "border-left-color",
-    "border-right-width", "border-right-style", "border-right-color", "aspect-ratio", "overflow-x", ...EDGE_PROPS];
+    "border-right-width", "border-right-style", "border-right-color", "aspect-ratio", "overflow-x", "scroll-padding-left", "scroll-padding-right", ...EDGE_PROPS];
   const edged = new Set();    // keepers holding it as a clear border (see holding)
   const WHOLE = /^(img|picture|video|canvas|iframe|embed|object|svg|table|input|select|textarea|button)$/;  // (laid out whole: no room goes into one)
 
@@ -2338,16 +2369,55 @@
     // navigation bar, its row of links placed over it.)
     if (!kids.length && !sealed && !past.length && !over.length && !ratio) return;
     const inside = insideOf(e), afloat = holdsPage(e) ? kids.filter(floatsIn) : [];
-    if (!sealed && !out_ && !ratio && !ownMarks(e) && kids.every((c) => afloat.includes(c) || fills(c, inside)) && !slides(e, kids) && !kids.some(framesPanels)) {
+    // (What in it isn't laid across it, when that alone keeps it from handing the room on: a box or a few, see freed.)
+    let short = sealed || out_ || ratio || ownMarks(e) ? null : [];
+    const amid = [];
+    for (const c of short ? kids : []) {
+      if (afloat.includes(c) || fills(c, inside)) continue;
+      if (inMiddle(c, inside)) { amid.push(c); continue; }
+      short.push(c);
+      if (short.length > 3 || c.nodeType !== Node.ELEMENT_NODE) { short = null; break; }  // (its own words, or rows of their own)
+    }
+    if (short && !short.length && !slides(e, kids) && !kids.some(framesPanels)) {
+      blockers.delete(e);
       out.hand.push(e);
       for (const c of [...past, ...afloat]) out.bring.push([c, e]);
-      for (const c of kids) if (!afloat.includes(c)) plan(c, out);
+      for (const c of kids) if (!afloat.includes(c) && !amid.includes(c)) plan(c, out);
     } else {
       const held = holding(e);
       out.hold.push(held);
+      if (short && short.length) blockers.set(e, short);
+      else blockers.delete(e);
       if (held[5]) return;  // (what is placed against it is placed inside its border, in the middle)
     }
     for (const a of over) plan(a, out);
+  }
+  // A box that kept the room for no more than a box or a few in it not laid across it, as it lies now, hands it on once
+  // it lays none of them out any more (taken out, hidden, placed by itself, emptied): planned afresh, as a look at the
+  // page as it is then would. Amazon's home puts a spinner in the middle of its deck of cards while it brings more in:
+  // the deck kept the room from then on, the spinner long gone, and its row of cards that a finger scrolls was laid out
+  // in the middle, cut off at the strips' edges, white under them (his recording, 11-03; on the phone the page comes in
+  // slower than in the lab, and the spinner was there as the deck was looked at, at each load).
+  const blockers = new WeakMap();  // a box keeping the room -> what in it wasn't laid across it
+  // One centered in the box, no wider than the middle there, nor anything in it running on past it, needs none of it
+  // where the box's middle is the middle's as well (as far under the strip on one side as on the other): with the room
+  // handed on it stays where it would be with the room kept, in the middle (a box planned is laid out across all it is
+  // laid in, the room let go). Amazon's spinner, centered by its margins, kept the room on the deck all the same while
+  // it showed, which was each time the deck brought more cards in as he scrolled down: the rows in it were cut off at
+  // the middle's ends, white under the strips beside them, the row of cards he had swiped along cut off in the middle
+  // of a card (his recording, 11-03 18:32: "중간부분 폰케이스있는데는 왜저럼"), and laid out anew in the middle's width
+  // each time.
+  function inMiddle(c, inside) {
+    if (c.nodeType !== Node.ELEMENT_NODE) return false;
+    const r = c.getBoundingClientRect(), { lo, hi } = clearBand(), mid = (inside.left + inside.right) / 2;
+    if (Math.abs((Math.max(inside.left, lo) + Math.min(inside.right, hi)) / 2 - mid) >= 1) return false;  // (the middle of what it keeps)
+    return Math.abs((r.left + r.right) / 2 - mid) < 1 && r.left >= lo - 0.5 && r.right <= hi + 0.5 && r.left + c.scrollWidth <= hi + 0.5;
+  }
+  function freed(k) {
+    const b = blockers.get(k);
+    if (!b) return false;
+    const kids = kidsOf(k);
+    return b.every((c) => !kids.includes(c));
   }
   // What a box places against its own sides that ends up past the middle: the part of a row set at its end by position
   // rather than laid in its flow (a count, a carousel's arrows and page number, a header's menu and sign-in buttons on
@@ -2424,7 +2494,8 @@
     const bare = (s) => /^(none|hidden)$/.test(cs[`border${s}Style`]) || !(parseFloat(cs[`border${s}Width`]) > 0);
     const edge = !roll && bare("Left") && bare("Right") && cs.borderImageSource === "none" &&
       cs.backgroundClip.split(",").every((v) => v.trim() === "border-box");
-    return [e, r, parseFloat(cs.paddingLeft) || 0, parseFloat(cs.paddingRight) || 0, cs.boxSizing, edge, roll, ratio && r.height - (2 * strip.gap) / ratio];
+    const pads = roll && /auto|scroll/.test(cs.overflowX) ? [cs.scrollPaddingLeft, cs.scrollPaddingRight] : null;  // (a row a finger scrolls: see rolls)
+    return [e, r, parseFloat(cs.paddingLeft) || 0, parseFloat(cs.paddingRight) || 0, cs.boxSizing, edge, roll, ratio && r.height - (2 * strip.gap) / ratio, pads];
   }
   // A box that clips what it holds sideways and lays a row of it out past its sides, cards narrower than the middle it
   // would keep (a carousel showing the edge of the next card): kept in the middle inside a clear border, it cut the row
@@ -2438,18 +2509,44 @@
   // the box: not panels as wide as the middle, swiped in whole, nor a column of cards in a panel further along (Naver's
   // home, its panels sized to the page's own width by its script: given the room as padding, the next panel showed
   // under the strip and the panels were sized to the whole page, until a look sent the room up a second later).
+  // A row the browser scrolls under the finger (overflow-x auto or scroll) rolls the same way: inside a clear border, it
+  // cut its cards off at the middle's ends too, white under the strips beside Amazon's rows of cards and products (his
+  // recording, 11-03: "아마존 캐러셀 이런거 좌우 다 보이게?"). Held as padding, it shows them under the strips, and
+  // where it snaps and what it scrolls into view are taken in the middle, by a scroll padding as wide (see holdAll; and
+  // a card the page's script turns it to, see rowScrolled). Not one holding a page of its own, taller than the screen.
+  // One laid out past its sides even widened is read as in Safari's own layout as well, where it is the strips' width
+  // narrower, as in the middle once it keeps the room: its cards laid out from its start, as wide as here or as the
+  // same share of it. Widened, Amazon's row of two cards ("Keep shopping for ...": "For you" and "Deals") had the second
+  // card's middle inside it, though mostly past the middle's end; taken for a row laying nothing out past its sides, it
+  // was held inside a clear border, the second card cut off at the middle's end, white under the strip (his recording,
+  // 11-03 20:05).
   function rolls(e) {
-    if (!/hidden|clip/.test(getComputedStyle(e).overflowX)) return false;
-    const inside = insideOf(e), w = inside.right - inside.left - 2 * strip.gap;
-    const shown = (q) => q.left + q.width / 2 >= inside.left && q.left + q.width / 2 <= inside.right;
+    const cs = getComputedStyle(e), ox = cs.overflowX, scrolls = /auto|scroll/.test(ox);
+    if (scrolls ? holdsPage(e) : !/hidden|clip/.test(ox)) return false;
+    const inside = insideOf(e), strips = 2 * strip.gap, whole = inside.right - inside.left, w = whole - strips;
     const beside = (a, b) => Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > Math.min(a.height, b.height) / 2;
-    const row = (p, depth) => {
+    // (Cards narrower than `most`, one with its middle between `from` and `to` beside one without.)
+    const row = (p, depth, most, from, to) => {
+      const shown = (q) => q.left + q.width / 2 >= from && q.left + q.width / 2 <= to;
       const items = [...p.children].filter((c) => !c.hasAttribute(MARK) && !/^(inline|contents|none)$/.test(getComputedStyle(c).display))
         .map((c) => c.getBoundingClientRect()).filter((q) => q.width >= 1 && q.height >= 20);
-      if (items.length >= 2 && items.every((q) => q.width < w * 0.9) && items.some((a) => shown(a) && items.some((b) => !shown(b) && beside(a, b)))) return true;
-      return depth < 3 && [...p.children].some((c) => !c.hasAttribute(MARK) && row(c, depth + 1));
+      if (items.length >= 2 && items.every((q) => q.width < most) && items.some((a) => shown(a) && items.some((b) => !shown(b) && beside(a, b)))) return true;
+      return depth < 3 && [...p.children].some((c) => !c.hasAttribute(MARK) && row(c, depth + 1, most, from, to));
     };
-    return w > 0 && row(e, 1);
+    if (w <= 0) return false;
+    if (!scrolls || e.scrollWidth <= e.clientWidth + 1) return row(e, 1, w * 0.9, inside.left, inside.right);
+    const rtl = cs.direction === "rtl";
+    return row(e, 1, w * 0.9, inside.left + (rtl ? strips : 0), inside.right - (rtl ? 0 : strips)) || row(e, 1, whole * 0.9, inside.left, inside.right);
+  }
+
+  // Whether a box lies in the flow of one keeping the room (or of one in `also`, about to). Not one placed by itself
+  // (absolute or fixed) on the way: placed across a box keeping it as padding, it takes the room as well (see plan).
+  function inRoom(e, also = null) {
+    let a = e.parentElement;
+    while (a && !keepers.has(a) && !(also && also.has(a))) a = a.parentElement;
+    if (!a) return false;
+    for (let c = e; c !== a; c = c.parentElement) if (/^(absolute|fixed)$/.test(getComputedStyle(c).position)) return false;
+    return true;
   }
 
   // Gives the boxes of a plan the room: a border or padding as wide as the strip on each side, out of their own width. All are
@@ -2457,15 +2554,23 @@
   // own gives the room up from inside it too; one that still moves or grows hands it up to the box around it.
   function holdAll(out) {
     const g = strip.gap;
+    // (Planned from more than one box at once, as what comes into a page is (see frameIn), a box may lie in the flow of
+    // another that takes the room now, or keeps it already: it is taken once, by the outer one. Amazon's home brought a
+    // card into its deck as the deck came to keep the room, the card's header took it again inside, and the card's
+    // words and pictures were laid out in what was left, two strips in from each side.)
+    const taking = new Set(out.hold.map(([e]) => e));
+    out.hold = out.hold.filter(([e]) => !inRoom(e, taking));
+    out.hand = out.hand.filter((e) => !inRoom(e, taking));
     for (const e of out.hand) handed.add(e);
     for (const [e] of out.hold) {
       if (!handed.has(e)) continue;  // (it handed the room on before: what keeps it inside gives it back)
       for (const k of [...keepers]) if (e.contains(k)) letGo(k);
       for (const k of [...handed]) if (k !== e && e.contains(k)) unhand(k);
     }
-    for (const [e, , pl, pr, , edge] of out.hold) {
+    for (const [e, , pl, pr, , edge, , , pads] of out.hold) {
       if (edge) for (const side of ["left", "right"]) { setProp(e, `border-${side}-style`, "solid"); setProp(e, `border-${side}-color`, "transparent"); setProp(e, `border-${side}-width`, `${g}px`); }
       else { setProp(e, "padding-left", `${pl + g}px`); setProp(e, "padding-right", `${pr + g}px`); }
+      if (pads) pads.forEach((v, i) => setProp(e, `scroll-padding-${i ? "right" : "left"}`, v === "auto" ? `${g}px` : `calc(${v} + ${g}px)`));
     }
     const grew = new Set(out.hold.filter(([e, b, , , sizing]) => sizing !== "border-box" && Math.abs(e.getBoundingClientRect().width - b.width) > 0.5).map(([e]) => e));
     for (const e of grew) setProp(e, "box-sizing", "border-box");
@@ -2473,7 +2578,7 @@
     // layout. By its content box, that is as wide as there again, and so is its height.)
     for (const [e, b, , , sizing, , , tall] of out.hold) if (tall >= 1 && (sizing === "border-box" || grew.has(e))) setProp(e, "aspect-ratio", `${+b.width.toFixed(2)} / ${+tall.toFixed(2)}`);
     const failed = [];
-    for (const [e, b, , , , edge] of out.hold) {
+    for (const [e, b, , , , edge, , , pads] of out.hold) {
       const a = e.getBoundingClientRect();
       handed.delete(e);
       sendBack(e);
@@ -2481,6 +2586,7 @@
         keepers.add(e);
         if (edge) edged.add(e);
         else edged.delete(e);
+        if (pads) rowOurs.set(e, performance.now() + 500);
         continue;
       }
       edged.delete(e);
@@ -2500,6 +2606,49 @@
     for (const [e, , , , , , roll] of out.hold) if (roll && keepers.has(e)) for (const c of placedOut(e)) if (comesIn(c)) bringIn(c, e);
   }
   function letGo(e) { unsetProps(e, FRAME_PROPS); keepers.delete(e); edged.delete(e); edges.delete(e); unplace(e); sendBack(e); }
+
+  // A row the page's script scrolls by itself (one turning its cards every few seconds, a bar of tabs bringing the one
+  // tapped to its middle or its start), held or not, goes by what that script reads. Beside another window, it reads
+  // innerWidth as the part shown and the places of boxes from the page's left end, as in Safari's own layout, where the
+  // part shown begins there; widened, it begins a strip further on. Centering a card by both put it a strip's width to
+  // the left of the middle: Amazon's row of cards, turned on every four seconds to offsetLeft − (innerWidth − the
+  // card's width) / 2, stopped with its card half under the left strip, inside a clear border as inside padding (273,
+  // 575 and 877 across in Safari's own layout, 357, 659 and 961 widened; its cards don't snap while it turns). A tab
+  // brought to the start by its offsetLeft less the row's went under the left strip as well. Once such a scroll is
+  // still, a row that has a card centered or starting where the page reckons the part shown is, and none where it is,
+  // goes on by the strip. (Only a scroll no finger made: none sliding on the row, or lifted from it a moment before,
+  // nor the glide after. Not one of ours.)
+  const rowOurs = new WeakMap();  // a row -> until when its scrolls are ours (the room taken, a card brought to the middle)
+  const readerAt = new WeakMap(); // a row -> when the reader last scrolled it
+  const settling = new Map();     // a row the page scrolled by itself -> the timer looking at it once still
+  let slidAt = -Infinity, slidOn = null, fingerAt = null;  // when a finger last slid on the page (or lifted from sliding), on what; where it came down
+  function rowScrolled(k) {
+    if (strip.side !== "both") return;
+    const now = performance.now();
+    if (now < (rowOurs.get(k) ?? 0)) return;
+    if ((now - slidAt < 1000 && slidOn && k.contains(slidOn)) || now - (readerAt.get(k) ?? -Infinity) < 1000) { readerAt.set(k, now); return; }
+    clearTimeout(settling.get(k));
+    settling.set(k, setTimeout(() => { settling.delete(k); recenter(k); }, 120));
+  }
+  function recenter(k) {
+    if (!strip || !k.isConnected || touching || performance.now() < (rowOurs.get(k) ?? 0) || getComputedStyle(k).direction === "rtl") return;
+    const { lo, hi } = clearBand(), g = strip.gap, s = k.scrollLeft;
+    if (s < g - 0.5) return;
+    let n = 0, off = false, on = false;
+    const look = (p, depth) => {
+      for (const c of p.children) {
+        if (++n > 300) return;
+        if (c.hasAttribute(MARK)) continue;
+        const q = c.getBoundingClientRect(), at = (x) => Math.abs((q.left + q.right) / 2 - ((lo + hi) / 2 - x)) < 1.5 || Math.abs(q.left - (lo - x)) < 1.5;
+        if (q.width >= 10 && q.width <= hi - lo + 1) { if (at(g)) off = true; if (at(0)) on = true; }
+        if (depth < 4 && getComputedStyle(c).overflowX === "visible") look(c, depth + 1);
+      }
+    };
+    look(k, 1);
+    if (!off || on) return;
+    rowOurs.set(k, performance.now() + 1000);  // (the glide there)
+    k.scrollTo({ left: s - g, behavior: "smooth" });
+  }
 
   // A box keeping the room as a clear border, in a page's wrapper that cuts off what it holds sideways (or in a page
   // whose <body> does), cuts off what it holds at the inside of its border itself. In Safari's own layout the wrapper is
@@ -2733,7 +2882,8 @@
   // A box the room went through that keeps it after all (something came into it that isn't laid across all of it, or a
   // box in it couldn't take the room): what keeps it inside gives it back.
   function demote(p) {
-    if (keepers.has(p)) return;
+    if (keepers.has(p) || inRoom(p)) return;
+    blockers.delete(p);  // (kept for what is in it now, not for what was: see freed)
     for (const k of [...keepers]) if (p.contains(k)) letGo(k);
     for (const k of [...handed]) if (p.contains(k)) unhand(k);
     holdAll({ hand: [], hold: [holding(p)] });
@@ -2800,8 +2950,12 @@
     if (up) tell();
     if (unframed) return;
     const out = { hand: [], hold: [], bring: [] };
+    const free = [...keepers].filter(freed);  // (see freed)
+    for (const k of free) letGo(k);
     plan(root, out);
     for (const p of pages) plan(p, out);  // (a fixed box that is the page itself, see clearBar)
+    const planned = new Set([...out.hand, ...out.hold.map(([e]) => e)]);
+    for (const k of free) if (k.isConnected && !planned.has(k)) plan(k, out);  // (one placed across a box keeping the room, see frameIn)
     holdAll(out);
     for (const k of edged) if (k.scrollWidth > k.clientWidth + 1) cutAtMiddle(k);  // (its panels laid out since, see panelsIn)
     for (const k of keepers) carryEdges(k);
@@ -2836,9 +2990,10 @@
     for (const n of nodes) {
       if (!n.isConnected || seen.has(n) || (document.head && document.head.contains(n))) continue;  // (sheets, scripts)
       seen.add(n);
-      if (keepers.has(n)) { stale(n); continue; }
+      if (keepers.has(n)) { if (freed(n)) { letGo(n); plan(n, out); } else stale(n); continue; }
       for (let c = n, p = boxAround(n); p; c = p, p = boxAround(p)) {
         const own = c.nodeType === Node.ELEMENT_NODE && /^(absolute|fixed)$/.test(getComputedStyle(c).position);  // (placed by itself, not in its flow)
+        if (keepers.has(p) && freed(p)) { letGo(p); if (!seen.has(p)) { seen.add(p); plan(p, out); } break; }  // (what kept it there gone, see freed)
         if (keepers.has(p)) { if (own && !edged.has(p) && !seen.has(c) && across(c, p)) { seen.add(c); plan(c, out); } break; }  // (inside a border, it is in the middle)
         if (!handed.has(p)) continue;
         if (own && !across(c, p)) {
@@ -4672,7 +4827,12 @@
       const added = records.flatMap((rec) => [...rec.addedNodes]);
       if (added.some((n) => n.nodeType === Node.ELEMENT_NODE)) { lookAtNew(added); refixAllSoon(); }
       if (added.length) fitLinesSoon(added);
-      if (strip.side === "both") fitLinesSoon([], records.filter((rec) => rec.type === "attributes").map((rec) => rec.target));  // (a box shown or restyled, see frameIn)
+      // (A box shown or restyled, see frameIn; and one keeping the room for what is taken out of it, see freed.)
+      if (strip.side === "both") {
+        const keeperOf = (e) => { while (e && !keepers.has(e)) e = e.parentElement; return e; };
+        const left = records.filter((rec) => rec.type === "childList" && rec.removedNodes.length).map((rec) => keeperOf(rec.target)).filter((k) => k && blockers.has(k));
+        fitLinesSoon([], records.filter((rec) => rec.type === "attributes").map((rec) => rec.target).concat(left));
+      }
       if (!records.some((rec) => rec.type === "attributes")) return;
       repaintSoon();
       unbarSoon();
@@ -4702,6 +4862,7 @@
       if (el === document) {
         if (aside()) return;  // (before Safari draws it widened there)
         scrolledBar();
+        const stood = performance.now() - slid;  // (how long the page had stood still)
         slid = performance.now();
         if (lined && performance.now() > lining && Math.abs(scrollX - lined.x) > 0.5) lined = null;  // (moved on since)
         // Sent sideways by the strip's width in one step, off where it is held, with no finger on the page: Safari puts a
@@ -4709,9 +4870,21 @@
         // finger moves it that far at once. It is put back at once, for the next frame: beside another window, each post
         // Naver Cafe opened showed its middle a strip's width off for 0.18 seconds until then, and so did Samsung's page
         // as it loaded again. (Not while a field takes the keyboard: Safari scrolls that into view, see revealing.)
-        const jumped = Math.abs(scrollX - seenX) >= strip.gap - 1;
+        // Sent part of the way in one step, still before it and still a frame after, it is put back then too: a finger the
+        // page never saw goes on moving it, and so does a glide. Amazon, loaded again on the folded screen, came 42 over
+        // with no finger on it, the middle of its 466 in the middle of the 382 shown, and stayed there 0.16 seconds until
+        // put back once still (his recording, 11-03 20:06). That is where WebKit puts a page loaded again once its
+        // window has changed size, by the middle of the part it showed as a share of the page's width (it had been held
+        // past the strip beside another window, its middle in the middle), and where a script scrolling something in
+        // the page's middle to the middle would.
+        const step = Math.abs(scrollX - seenX), jumped = step >= strip.gap - 1;
         seenX = scrollX;
-        if (jumped && !touching && !revealing() && Math.abs(scrollX - pinX()) > 0.5 && !passing()) pin();
+        const off = !touching && !revealing() && Math.abs(scrollX - pinX()) > 0.5 && !passing();
+        if (jumped && off) pin();
+        else if (off && step >= pt(8) && stood >= 100) {
+          const was = slid;
+          requestAnimationFrame(() => requestAnimationFrame(() => { if (slid === was && !touching && !revealing() && !passing()) pin(); }));
+        }
         // (Slid by a finger the page never saw, one that came down on a frame from elsewhere, or still gliding: put
         // back once it is still, not against the finger, which shook the page from side to side, nor the glide. Slid
         // to a field taking the keyboard: once Safari's slide is over, gliding back, see revealing.)
@@ -4726,6 +4899,7 @@
         refixSoon(300);
         return;
       }
+      if (el instanceof Element && el.scrollWidth > el.clientWidth + 1) rowScrolled(el);  // (sideways: by the reader or the page, see rowScrolled)
       // A box that scrolls a page of its own up and down (see framesPage) brings its next ones the same way.
       if (!(el instanceof Element) || el.scrollHeight <= el.clientHeight + 1 || el.clientHeight < windowHeight() / 2) return;
       if (!scanTops.has(el)) scanTops.set(el, el.scrollTop);
@@ -4781,7 +4955,17 @@
     }, true);
     // A style sheet that comes in may size things in vw (see wholeScreen).
     document.addEventListener("load", (e) => { if (strip && e.target instanceof Element && e.target.localName === "link") wholeScreen(); }, true);
-    addEventListener("touchstart", () => { touching = true; touchedAt = performance.now(); }, { passive: true, capture: true });
+    addEventListener("touchstart", (e) => {
+      touching = true;
+      touchedAt = performance.now();
+      fingerAt = e.touches.length === 1 ? [e.touches[0].clientX, e.touches[0].clientY] : null;
+    }, { passive: true, capture: true });
+    // (A finger sliding, past where a tap still stays a tap, or more than one: see rowScrolled.)
+    addEventListener("touchmove", (e) => {
+      if (fingerAt && e.touches.length === 1 && Math.hypot(e.touches[0].clientX - fingerAt[0], e.touches[0].clientY - fingerAt[1]) <= pt(6)) return;
+      slidAt = performance.now();
+      slidOn = e.target;
+    }, { passive: true, capture: true });
     // touch-action (see pin) keeps Safari from sliding the page sideways, but a sideways swipe that drifts up or down a
     // little still scrolls the page by that much: a carousel the page slides itself crept the page up or down with
     // every swipe. A swipe on one that starts out sideways moves the page not at all; the carousel keeps getting the
@@ -4792,9 +4976,9 @@
     // There a swipe that starts out plainly sideways, twice as far across as up or down, is held too. Nothing else is
     // held back: once a touch is, Safari does nothing more with it, so a pinch whose first finger moved before the
     // second came down zoomed nothing, and a swipe from the page's edge went neither back nor forward. There too, left
-    // alone: whatever scrolls sideways itself under the finger and still can, fields, players, a press held before
-    // moving (selecting text), a swipe while text is selected (its handles), two fingers, a page zoomed in or wider
-    // than the screen, and a swipe from either edge of the page.
+    // alone: whatever the browser scrolls sideways itself under the finger and still can (a row held is scrolled here
+    // instead, below), fields, players, a press held before moving (selecting text), a swipe while text is selected
+    // (its handles), two fingers, a page zoomed in or wider than the screen, and a swipe from either edge of the page.
     let swipe = null;
     const EDGE = 32;
     const nearEdge = (x) => { const { lo, hi } = clearBand(); return x < lo + pt(EDGE) || x > hi - pt(EDGE); };
@@ -4809,27 +4993,166 @@
       const cs = getComputedStyle(n);
       return /auto|scroll/.test(cs.overflowX + cs.overflowY);
     });
+    // A row held from the browser's own sideways scrolling (see holdBoxes) is scrolled here, as the browser would: a
+    // swipe on it more across than up or down moves it under the finger, and let go, it glides on, slowing as Safari's
+    // own scrolling does, and comes to rest where it snaps, if it snaps (scroll-snap, its cards taken in the middle by
+    // the scroll padding it has there: see holdAll). The innermost row under the finger that can still go its way goes;
+    // one that can't goes nowhere, and neither does the page, as in the browser's (see contain). Left as the browser
+    // has it: a swipe in from either end of the middle (beside another window, either may be the window's edge, where
+    // Safari takes it to go back or forward), on a field or a player, held by the page's own script, or on text being
+    // selected in the row (its handles). A touch on a row gliding stops it, as it stops the browser's, and there too a
+    // tap that does only that is no click (else it opens the card it stopped on) and lets the row come to rest. A touch
+    // elsewhere leaves it gliding.
+    const KEEPS = "input, textarea, select, [contenteditable], video, audio";  // (fields and players: their touches their own)
+    const RATE = Math.log(0.998);  // how a glide slows, a millisecond at a time (UIScrollView's normal deceleration)
+    let drag = null;           // { row, snap, x, left, moves }: a row a finger scrolls
+    const glides = new Map();  // rows let go, gliding on: row -> { snap, frame } (frame 0: stopped by a touch)
+    let stopping = null, stopTap = null;  // a row a touch came down on and stopped, while it stays a tap; once it lifted
+    const heldRowsIn = (path) => path.filter((n) => rowsHeld.has(n) && n.isConnected && n.scrollWidth > n.clientWidth + 1);
+    const rangeOf = (row) => { const max = row.scrollWidth - row.clientWidth; return getComputedStyle(row).direction === "rtl" ? [-max, 0] : [0, max]; };
+    // (Its own snapping, off while it moves here: the browser would snap each step to the nearest card.)
+    const snapOf = (row) => { const t = getComputedStyle(row).scrollSnapType; return /^(x|inline|both)\b/.test(t) ? t : ""; };
+    const hold = (row, snap) => { if (snap) setProp(row, "scroll-snap-type", "none"); };
+    const rest = (row, snap) => { if (snap) unsetProps(row, ["scroll-snap-type"]); };
+    // Where a row that snaps comes to rest, for a glide that would end at `at` going `way` (-1, 0, 1): the snap position
+    // nearest it that way, as the cards' scroll-snap-align and margins and the row's scroll padding place them.
+    function snapNear(row, snap, at, way) {
+      const cs = getComputedStyle(row), r = row.getBoundingClientRect(), [lo, hi] = rangeOf(row), s = row.scrollLeft, rtl = cs.direction === "rtl";
+      const left = r.left + row.clientLeft + (parseFloat(cs.scrollPaddingLeft) || 0), right = r.left + row.clientLeft + row.clientWidth - (parseFloat(cs.scrollPaddingRight) || 0);
+      const spots = [];
+      const look = (p, depth) => {
+        for (const c of p.children) {
+          const ccs = getComputedStyle(c);
+          if (ccs.display === "none") continue;
+          const align = ccs.scrollSnapAlign.split(/\s+/).pop();
+          if (align !== "none") {
+            const q = c.getBoundingClientRect(), a = q.left - (parseFloat(ccs.scrollMarginLeft) || 0), b = q.right + (parseFloat(ccs.scrollMarginRight) || 0);
+            const d = align === (rtl ? "end" : "start") ? a - left : align === (rtl ? "start" : "end") ? b - right : (a + b - left - right) / 2;
+            spots.push(Math.min(hi, Math.max(lo, s + d)));
+          }
+          if (depth < 3 && !/auto|scroll|hidden|clip/.test(ccs.overflowX)) look(c, depth + 1);
+        }
+      };
+      look(row, 1);
+      const ahead = way ? spots.filter((v) => (v - s) * way > -0.5) : spots, pool = ahead.length ? ahead : spots;
+      let best = null;
+      for (const v of pool) if (best === null || Math.abs(v - at) < Math.abs(best - at)) best = v;
+      return best !== null && (/mandatory/.test(snap) || Math.abs(best - at) <= row.clientWidth / 3) ? best : null;
+    }
+    // Let go at v (points a millisecond along scrollLeft): glides on as Safari's would, or to where it snaps.
+    function glideOn(row, snap, v) {
+      const [lo, hi] = rangeOf(row), from = row.scrollLeft, end = Math.min(hi, Math.max(lo, from - v / RATE));
+      const to = snap ? snapNear(row, snap, end, Math.abs(v) > 0.2 ? Math.sign(v) : 0) : null;
+      const was = glides.get(row);
+      if (was) { cancelAnimationFrame(was.frame); glides.delete(row); }
+      if (to === null ? Math.abs(v) < 0.02 : Math.abs(to - from) < 0.5) { if (to !== null) row.scrollTo({ left: to, behavior: "instant" }); rest(row, snap); return; }
+      // (To where it snaps: as fast as it was let go, slowing all the way there, in no more than a second or so.)
+      const span = to === null ? 0 : (to - from) * v > 0 ? Math.max(250, Math.min(1200, (3 * (to - from)) / v)) : 300, t0 = performance.now();
+      const glide = { snap, frame: 0 };
+      const step = (now) => {
+        if (glides.get(row) !== glide) return;
+        const t = Math.max(0, now - t0);
+        let p, done;
+        if (to !== null) { done = t >= span; p = done ? to : to - (to - from) * (1 - t / span) ** 3; }
+        else { p = from + (v * (Math.exp(RATE * t) - 1)) / RATE; done = Math.abs(v * Math.exp(RATE * t)) < 0.02 || p <= lo || p >= hi; }
+        if (!row.isConnected) done = true;
+        else row.scrollTo({ left: Math.min(hi, Math.max(lo, p)), behavior: "instant" });
+        slidAt = performance.now();  // (the reader's: see rowScrolled)
+        if (!done) { glide.frame = requestAnimationFrame(step); return; }
+        glides.delete(row);
+        rest(row, snap);
+      };
+      glide.frame = requestAnimationFrame(step);
+      glides.set(row, glide);
+    }
+    // Rows a touch stopped gliding, the touch gone without scrolling them: they come to rest where they snap.
+    function comeToRest(but = null) {
+      for (const [row, { snap, frame }] of [...glides]) if (!frame && row !== but) glideOn(row, snap, 0);
+    }
+    function startDrag(e) {
+      const x = e.touches[0].clientX, dx = x - swipe.x;
+      const row = swipe.rows.find((r) => { const [lo, hi] = rangeOf(r); return dx < 0 ? r.scrollLeft < hi - 0.5 : r.scrollLeft > lo + 0.5; }) || swipe.rows[0];
+      const glide = glides.get(row);
+      comeToRest(row);
+      let snap;
+      if (glide) { cancelAnimationFrame(glide.frame); glides.delete(row); snap = glide.snap; }
+      else { snap = snapOf(row); hold(row, snap); }
+      drag = { row, snap, x, left: row.scrollLeft, moves: [[e.timeStamp, x]] };
+    }
+    function moveDrag(e) {
+      const x = e.touches[0].clientX, [lo, hi] = rangeOf(drag.row);
+      drag.row.scrollTo({ left: Math.min(hi, Math.max(lo, drag.left - (x - drag.x))), behavior: "instant" });
+      drag.moves.push([e.timeStamp, x]);
+      while (drag.moves.length > 2 && e.timeStamp - drag.moves[0][0] > 100) drag.moves.shift();
+    }
+    // (How fast the finger went over its last tenth of a second, if it was still going as it lifted.)
+    function endDrag(e, still = false) {
+      const { row, snap, moves } = drag, [t1, x1] = moves[moves.length - 1], [t0, x0] = moves[0];
+      drag = null;
+      const v = !still && t1 - t0 >= 8 && e.timeStamp - t1 < 60 ? -(x1 - x0) / (t1 - t0) : 0;
+      glideOn(row, snap, Math.max(-6, Math.min(6, v)));
+    }
+    const selectedIn = (row) => { const sel = getSelection(); return !!sel && !sel.isCollapsed && sel.rangeCount > 0 && sel.getRangeAt(0).intersectsNode(row); };
     addEventListener("touchstart", (e) => {
       swipe = null;
-      if (!strip || wide || e.touches.length !== 1 || zoomed() || nearEdge(e.touches[0].clientX)) return;
-      if (!(e.target instanceof Element) || getSelection()?.isCollapsed === false) return;
-      const path = e.composedPath(), across = carouselOf(e.target) ? 1 : inScroller(path) ? 2 : 0;
-      if (across) swipe = { x: e.touches[0].clientX, y: e.touches[0].clientY, at: e.timeStamp, way: "", path, across };
+      stopping = null;
+      if (drag) endDrag(e, true);  // (a second finger)
+      const path = e.composedPath();
+      for (const [row, glide] of glides) {
+        if (!glide.frame || !path.includes(row)) continue;
+        cancelAnimationFrame(glide.frame);
+        glide.frame = 0;
+        if (e.touches.length === 1) stopping = { row, x: e.touches[0].clientX, y: e.touches[0].clientY };
+      }
+      if (!strip || wide || e.touches.length !== 1 || zoomed()) return;
+      if (!(e.target instanceof Element)) return;
+      const x = e.touches[0].clientX;
+      const rows = path.some((n) => n instanceof Element && n.matches(KEEPS)) ? [] : heldRowsIn(path).filter((r) => !selectedIn(r));
+      const { lo, hi } = clearBand(), edge = nearEdge(x) ? (x < (lo + hi) / 2 ? -1 : 1) : 0;
+      if (!rows.length && (edge || getSelection()?.isCollapsed === false)) return;
+      const across = rows.length ? 1 : carouselOf(e.target) ? 1 : inScroller(path) ? 2 : 0;
+      if (across) swipe = { x, y: e.touches[0].clientY, at: e.timeStamp, way: "", path, across, rows, edge };
     }, { passive: true, capture: true });
     addEventListener("touchmove", (e) => {
+      if (stopping && (e.touches.length !== 1 || Math.hypot(e.touches[0].clientX - stopping.x, e.touches[0].clientY - stopping.y) > pt(6))) stopping = null;
+      if (drag && e.touches.length !== 1) endDrag(e, true);
       if (!swipe || e.touches.length !== 1) { swipe = null; return; }
       if (!swipe.way) {
         // (Far enough that a second finger landing for a pinch has come down, and short of where Safari starts to
         // scroll.)
         const dx = e.touches[0].clientX - swipe.x, dy = e.touches[0].clientY - swipe.y;
         if (Math.max(Math.abs(dx), Math.abs(dy)) < pt(6)) return;
-        swipe.way = Math.abs(dx) > swipe.across * Math.abs(dy) && e.timeStamp - swipe.at < 400 && !sideways(swipe.path, dx) ? "x" : "y";
+        if (swipe.rows.length) {
+          swipe.way = Math.abs(dx) > Math.abs(dy) && Math.sign(dx) !== -swipe.edge && !e.defaultPrevented && !swipe.rows.some(selectedIn) ? "x" : "y";
+          if (swipe.way === "x") startDrag(e);
+        } else swipe.way = Math.abs(dx) > swipe.across * Math.abs(dy) && e.timeStamp - swipe.at < 400 && !sideways(swipe.path, dx) ? "x" : "y";
       }
       if (swipe.way === "x" && e.cancelable) e.preventDefault();
+      if (drag) moveDrag(e);
     }, { passive: false });
+    for (const type of ["touchend", "touchcancel"]) {
+      addEventListener(type, (e) => {
+        if (e.touches.length) return;
+        stopTap = stopping && type === "touchend" ? { row: stopping.row, at: performance.now() } : null;
+        stopping = null;
+        if (drag) endDrag(e, type === "touchcancel");
+        else comeToRest();
+      }, { passive: true, capture: true });
+    }
+    // (Its click comes as it lifts, or a few tenths of a second on where a double tap may zoom: see steer.)
+    addEventListener("click", (e) => {
+      if (!stopTap || !e.isTrusted || performance.now() - stopTap.at > 800 || !e.composedPath().includes(stopTap.row)) return;
+      stopTap = null;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }, true);
     // A swipe may have slid a carousel the page's script moves: look again once it settles.
     for (const type of ["touchend", "touchcancel"]) {
-      addEventListener(type, (e) => { touching = e.touches.length > 0; if (strip && !touching) { liftBar(); pin(); refixAllSoon(400); } }, { passive: true, capture: true });
+      addEventListener(type, (e) => {
+        touching = e.touches.length > 0;
+        if (!touching && slidAt >= touchedAt) slidAt = performance.now();  // (lifted from sliding: its glide)
+        if (strip && !touching) { liftBar(); pin(); refixAllSoon(400); }
+      }, { passive: true, capture: true });
     }
     // Taps open menus and drawers by switching a class, which adds no nodes.
     addEventListener("click", () => { if (strip) { refixSoon(350); refixAllSoon(900); } }, true);
