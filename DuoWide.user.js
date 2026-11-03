@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DuoWide
 // @namespace    https://github.com/hyungchulc/duowide
-// @version      2.0.8
+// @version      2.0.9
 // @description  Lets web pages use the whole iPhone Duo outer screen in Safari, under the side strip, and keeps what you tap clear of the strip.
 // @author       hyungchulc
 // @homepageURL  https://github.com/hyungchulc/duowide
@@ -3829,12 +3829,17 @@
     // aside) in the flow beside paragraphs given room, as wide as they are from the same left, takes the same room, as
     // on a narrower phone: its pictures smaller. A picture wider than the words (a banner across the page) runs on under
     // the strip as before, as do pictures beside words that run on with DuoWide-WideText, and a player (see waits).
+    // A card's picture over its own title is no picture in a column of words, and it stays as large as the pictures of
+    // the cards beside and around it. Naver Sports lays its news out two cards to a row: each card's title given room
+    // took its picture with it, only in the card reaching under the strip, a picture 129 wide beside one 213 wide (his
+    // recording, 11-03: "오른쪽 사진이 왜저럼"). A list of cards one under another would have had a narrower picture only
+    // over the titles that wrap.
     if (!wide) for (const [column, rows] of columnsOf()) {
       for (const box of column.children) {
         if (insets.has(box) || framed(box)) continue;
         const r = box.getBoundingClientRect();
         if (!onScreen(r) || !hidden(r.left, r.right) || (below !== null && r.top < below)) continue;
-        if (!rows.some((q) => Math.abs(q.left - r.left) < 1 && Math.abs(q.right - r.right) < 1) || !pictured(box, r) || !usable(box)) continue;
+        if (!rows.some((q) => Math.abs(q.left - r.left) < 1 && Math.abs(q.right - r.right) < 1) || !pictured(box, r) || !usable(box) || sideBySide(column)) continue;
         if (!anchor && below === null) anchor = anchorNow();
         if (narrowed(box, r, need(r))) insets.set(box, []);
       }
@@ -3843,12 +3848,37 @@
     return { single, multi, giveRoom };
   }
 
+  // Words read from line to line: not a card's title, a link's words or words held to a few lines.
+  function paragraph(block, nodes) {
+    if (heldText(block)) return false;
+    let own = 0, all = 0;
+    for (const n of nodes) {
+      if (!n.parentElement) continue;  // (written anew since)
+      const len = n.data.trim().length;
+      all += len;
+      if (!n.parentElement.closest(PRESSED)) own += len;
+    }
+    return own > 0 && own >= all / 2;
+  }
+  // Whether a box or one around it lies beside another about as wide: a grid's card, one of a few columns. (Not beside
+  // what runs down its side, a comment's picture of its writer.)
+  function sideBySide(box) {
+    for (let p = box, i = 0; p && p !== document.body && i < 5; p = p.parentElement, i++) {
+      const q = p.getBoundingClientRect();
+      for (const s of [p.previousElementSibling, p.nextElementSibling]) {
+        if (!s || s.hasAttribute(MARK)) continue;
+        const o = s.getBoundingClientRect();
+        if (o.width >= q.width / 2 && (o.right <= q.left + 1 || o.left >= q.right - 1) && Math.min(o.bottom, q.bottom) - Math.max(o.top, q.top) > Math.min(o.height, q.height) / 2) return true;
+      }
+    }
+    return false;
+  }
   // The boxes holding paragraphs given room, each with the sides of those it holds (through any boxes around one that
   // hold only it).
   function columnsOf() {
     const out = new Map();
     for (const [b, nodes] of insets) {
-      if (!nodes.length || !b.isConnected) continue;
+      if (!nodes.length || !b.isConnected || !paragraph(b, nodes)) continue;
       let w = b;
       while (w.parentElement && w.parentElement !== document.body && w.parentElement.childElementCount === 1) w = w.parentElement;
       if (!w.parentElement) continue;
@@ -3949,6 +3979,9 @@
       const pr = player.getBoundingClientRect();
       if (pr.width < 120 || pr.height < 80 || !onScreen(pr) || !hidden(pr.left, pr.right)) continue;
       if (waits(player)) { trace(player, "player", "waits to be pressed"); continue; }
+      // A frame in a card beside another stays as large as that one until it is pressed: an advert among a grid's stories
+      // on Naver's home, 134 wide beside pictures 221 wide (see fitLines).
+      if (/^i?frame$/.test(player.localName) && frameSaid.get(player.contentWindow) !== "used" && sideBySide(player)) { trace(player, "player", "beside another"); continue; }
       // One laid over a box that keeps its shape (an embed filling a box as tall as a share of its width) narrows with
       // the boxes around it that hold nothing else, the outermost first, so that it keeps its shape too; failing that,
       // on its own.
@@ -4786,6 +4819,37 @@
     });
   }
 
+  // A small box fixed on the screen that shows under the strip (a "back to top" button put in, or switched on, once the
+  // page has scrolled) comes out from under it in the frame it shows in. It waited for the page to stop and then jumped
+  // over: on Naver Sports for as long as he went on flicking, on Safari's own buttons (his recording, 11-03 21:50). Moved
+  // over, it lays nothing else in the page out anew and the page isn't scrolled, so a finger or a glide goes on.
+  const floats = new Set();
+  let floatFrame = 0;
+  function fitFloats(nodes) {
+    for (const n of nodes) if (n.nodeType === Node.ELEMENT_NODE && !n.hasAttribute(MARK)) floats.add(n);
+    if (floatFrame || !floats.size) return;
+    floatFrame = requestAnimationFrame(() => {
+      floatFrame = 0;
+      const seen = [...floats].slice(0, 20);  // (a page restyling more in a frame than a button or two: the rest wait for the look)
+      floats.clear();
+      if (!strip || !document.body || passing()) return;
+      const band = clearBand(), half = (band.hi - band.lo) / 2, right = strip.side !== "left", left = strip.side !== "right";
+      const under = (q) => q.width >= 1 && q.height >= 1 && q.width < half && q.bottom > 0 && q.top < windowHeight() && ((right && q.right > band.hi + 1) || (left && q.left < band.lo - 1));
+      const found = new Set();
+      for (const e of seen) {
+        // (A button in a box or two, not a feed's next posts or the page around it.)
+        if (!e.isConnected || e.getBoundingClientRect().height > windowHeight() / 2 || e.getElementsByTagName("*").length > 12) continue;
+        for (const c of [e, ...e.querySelectorAll("*")]) {
+          if (under(c.getBoundingClientRect()) && getComputedStyle(c).position === "fixed") { found.add(c); break; }
+        }
+      }
+      if (!found.size) return;
+      frozen = new Map();
+      try { for (const c of found) clearBar(c, band); } finally { thaw(); }
+      if (changes) changes.takeRecords();  // its own restyling
+    });
+  }
+
   function watch() {
     // A bar or notice that was there all along may show by a switched class or style (a cookie notice fading in, a
     // "back to top" button once the page has scrolled): the bars are fitted again shortly after, not while a finger or
@@ -4825,6 +4889,7 @@
       // Words alone bring no new boxes, bars or players to look over (a clock's digits written anew every second had the
       // whole page looked over every second): their lines are fitted as they come (see fitLinesSoon).
       const added = records.flatMap((rec) => [...rec.addedNodes]);
+      fitFloats([...added, ...records.filter((rec) => rec.type === "attributes").map((rec) => rec.target)]);
       if (added.some((n) => n.nodeType === Node.ELEMENT_NODE)) { lookAtNew(added); refixAllSoon(); }
       if (added.length) fitLinesSoon(added);
       // (A box shown or restyled, see frameIn; and one keeping the room for what is taken out of it, see freed.)
