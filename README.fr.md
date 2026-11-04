@@ -48,9 +48,10 @@ dessous.
   les commandes natives de Safari) passent sous la bande comme des images, jusqu’à ce que vous les touchiez ou les
   lanciez. Ils s’arrêtent alors avant la bande, pour que vous puissiez toujours toucher les boutons plein écran et
   volume.
-- La page ne glisse pas sur le côté. Le zoom à deux doigts et les balayages depuis le bord de l’écran pour aller à la
-  page précédente ou suivante fonctionnent toujours. DuoWide dessine lui-même la barre de défilement de la page : la
-  barre de défilement horizontale d’iOS n’apparaît donc pas en bas de l’écran.
+- La page ne glisse pas sur le côté, sauf dans un cas décrit dans Problèmes connus. Le zoom à deux doigts et les
+  balayages depuis le bord de l’écran pour aller à la page précédente ou suivante fonctionnent toujours. DuoWide
+  dessine lui-même la barre de défilement de la page : la barre de défilement horizontale d’iOS n’apparaît donc pas en
+  bas de l’écran.
 - Dans Split View sur l’écran interne (Safari à côté d’une autre app), les couleurs et arrière-plans de la page se
   prolongent aussi sous la bande de Safari, sur le bord de la fenêtre, tandis que le texte, les images et les boutons
   restent à l’écart de celle-ci. Pour garder la mise en page de Safari dans Split View, réglez `split` sur `false`.
@@ -148,6 +149,9 @@ fichier : redéfinissez donc ces paramètres après chaque mise à jour.
 - Sur les pages élargies, toucher deux fois effectue un zoom avant. Safari le permet quand la largeur d’une page est
   définie par un nombre, et le réglage qui le désactive ne peut pas être combiné avec celui qui empêche la page de
   glisser sur le côté.
+- Si vous touchez une page qui glisse encore après un geste rapide, ce toucher peut la décaler sur le côté, au plus
+  de la largeur de la bande. Safari ne signale pas ce toucher à la page : on ne peut donc pas l’empêcher, mais la page
+  revient d’elle-même aussitôt.
 - Certains sites ne fonctionnent pas encore bien. N’hésitez pas à les signaler.
 
 ## Proposer un site ou signaler un problème

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DuoWide
 // @namespace    https://github.com/hyungchulc/duowide
-// @version      2.0.9
+// @version      2.0.10
 // @description  Lets web pages use the whole iPhone Duo outer screen in Safari, under the side strip, and keeps what you tap clear of the strip.
 // @author       hyungchulc
 // @homepageURL  https://github.com/hyungchulc/duowide
@@ -980,6 +980,8 @@
   const clips = (e) => !!e && /hidden|clip/.test(getComputedStyle(e).overflowX);
   const widePage = () => document.documentElement.scrollWidth > strip.full + 8 && !clips(document.documentElement) && !clips(document.body);
   let wide = false, wideAt = 0, seenX = 0, focusedAt = -Infinity;  // (seenX: where the page last was sideways, see watch; focusedAt: see revealing)
+  const STILL = 120;  // (milliseconds since its last scroll that a page counts as moving: see pin)
+  let backed = { frames: Infinity, by: 0 }, shoved = 0, shovedUntil = 0;  // the page's last put-back: how far, and how many frames ago; how many a finger undid running, and until when it is left to that finger (see watch)
   // A field that takes the keyboard (or a picker) is scrolled into view by Safari as that comes up, and centered across
   // the part it shows (WebKit's _zoomToFocusRect): on the widened page, one right of that part's middle (a search box
   // after a menu, as under each DC gallery's list) slides the page sideways too, in a quarter of a second. Put back at
@@ -993,7 +995,7 @@
   const takesKeys = (el) => el instanceof HTMLElement && (el.isContentEditable || /^(textarea|select)$/.test(el.localName) || (el.localName === "input" && !NO_KEYS.test(el.type)));
   const deepActive = () => { let a = document.activeElement; while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement; return a; };
   const keyboardUp = () => !!window.visualViewport && visualViewport.height < windowHeight() * 0.75;
-  function pin(glide = false) {
+  function pin(glide = false, now = false) {
     if (!strip) return;
     const root = document.documentElement;
     wide = widePage();
@@ -1006,7 +1008,7 @@
       else if (performance.now() - wideAt >= 1000) { yielded = true; restore(); return; }
     }
     if (wide || zoomed()) {  // zoomed in: the reader is panning on purpose
-      if ("touch-action" in (fixed.get(root) || {})) unsetProps(root, ["touch-action"]);
+      unsetProps(root, ["touch-action", "overscroll-behavior-x"]);
       for (const el of holds) unsetProps(el, ["touch-action"]);
       holds.clear();
       rowsHeld.clear();
@@ -1021,12 +1023,34 @@
     // A page's own setting that still lets a touch slide it sideways (manipulation, which pages set to tap at once)
     // gives way to ours, keeping whether it lets a pinch zoom. Otherwise each slide would be put back while the finger
     // still pushes it, and the page shook from side to side.
-    const own = getComputedStyle(root).touchAction, hold = /^(auto|manipulation)$|pinch-zoom/.test(own) ? HOLD : "pan-y";
+    const cs = getComputedStyle(root), own = cs.touchAction, hold = /^(auto|manipulation)$|pinch-zoom/.test(own) ? HOLD : "pan-y";
     if (root.style.getPropertyValue("touch-action") !== hold && (/^(auto|manipulation)$/.test(own) || /pan-x/.test(own))) setProp(root, "touch-action", hold);
+    // WebKit can't set that hold for a finger that comes down on the page still gliding, even in the last slow second of
+    // a glide that shows no move any more: it leaves such a touch out (_shouldIgnoreTouchEvent, so the page hears nothing
+    // of it either), and only what the touch before had set may still be there. Two of the seven slides in his recording
+    // of The Verge were such touches (11-04 02:25, the page had last heard of a touch 0.8 and 1.2 seconds before). One
+    // that goes up and across, with no hold, takes the page some 100 points past its left edge, on the rubber band, as
+    // on The Verge any touch did (11-04 00:56, "the verge 얘는 왜이러냐"; see bodyPans for why any). Kept from bouncing
+    // sideways, the page goes nowhere that way. (WebKit reads this on <html> alone; Safari's swipes back and forward
+    // don't look at it, and the bounce up and down has a setting of its own. The other way the page has the strip's
+    // width to go: see watch.)
+    if (cs.overscrollBehaviorX !== "none") setProp(root, "overscroll-behavior-x", "none");
     // (Under a finger it is put back once the finger lifts. At once: on a page that eases its own scrolling, it would
-    // be seen sliding back.)
-    const x = pinX();
-    if (Math.abs(scrollX - x) > 0.5 && !touching && (glide || !revealing())) scrollTo({ left: x, top: scrollY, behavior: glide ? "smooth" : "instant" });
+    // be seen sliding back. Moving, it is not put back by the way, whenever a look at the page or a change of its size
+    // happens to come: the page lurched back and slid on again every tenth of a second all through each glide on The
+    // Verge. The last move set a timer to look once it stops, and watch knows when it can't wait.)
+    const x = pinX(), off = Math.abs(scrollX - x);
+    if (off > 0.5 && !touching && (glide || !revealing()) && (glide || now || performance.now() - slid >= STILL)) {
+      if (glide) scrollTo({ left: x, top: scrollY, behavior: "smooth" });
+      else {
+        // (By how far, not to where: scrollTo has Safari put the page where the page last knew it to be, up or down too,
+        // and a glide loses what went by since, 17 points gliding 11 a frame; scrollBy goes that far from where Safari
+        // has it now, WebKit's DeltaUpdate, up and down left alone.)
+        scrollBy({ left: x - scrollX, top: 0, behavior: "instant" });
+        const was = (backed = { frames: 0, by: off });
+        requestAnimationFrame(function count() { if (backed === was && ++was.frames <= 12) requestAnimationFrame(count); });
+      }
+    }
     seenX = scrollX;
   }
 
@@ -1216,7 +1240,7 @@
   // it where it is. That still leaves the fixed boxes behind for as long as the page slides and a moment after: a page
   // that puts itself sideways before it is touched is left at Safari's own width instead (see aside), and this is for
   // one sent sideways after.
-  let lined = null, lining = 0, slid = -Infinity, trip = false;  // where the page was last put in line, and how many times; until when its scrolls are ours; when it last scrolled; a trip under way
+  let lined = null, lining = 0, slid = -Infinity, swept = -Infinity, seenY = 0, trip = false;  // where the page was last put in line, and how many times; until when its scrolls are ours; when it last scrolled, when it last went fast sideways, and to what height; a trip under way
   function line(still = false) {
     const v = window.visualViewport;
     if (!v || strip.side !== "right" || touching || trip || (!still && performance.now() - slid < 120)) return;
@@ -1367,6 +1391,17 @@
   const rowsHeld = new Set();  // boxes given it that scroll sideways: scrolled that way here (see drag)
   let flat = new WeakSet();  // boxes seen not to scroll by themselves: not looked at again
   const sideways = (el, cs) => /auto|scroll/.test(cs.overflowX) && el.scrollWidth > el.clientWidth + 1;
+  // The body is one to keep its own only where it does scroll sideways by itself. With <html> left at visible its
+  // overflow is the page's, and the page is held or wide whatever the body's width reads as; but to WebKit an element
+  // with overflow auto or scroll starts a touch afresh, whether it scrolls or not, so a page that sets that on its body
+  // and is a point or two wider than the screen held no touch anywhere: all of The Verge, on the phone (468 wide, by a
+  // box out past its edge), every touch slid it sideways by the finger, and the page to its end, all 86 points of it
+  // (his recordings, 11-04, the diagnostic read each touch as auto@body). Or a wee bit, by itself: no more than the page
+  // counts as wide by (see widePage).
+  const bodyPans = (cs) => {
+    const b = document.body, html = getComputedStyle(document.documentElement);
+    return sideways(b, cs) && b.scrollWidth > b.clientWidth + 8 && (html.overflowX !== "visible" || html.overflowY !== "visible");
+  };
   // (Up to one fixed on the screen: what scrolls under it is the page.)
   const inSideways = (el) => {
     for (let a = el; a && a !== document.body && a !== document.documentElement; a = a.parentElement) {
@@ -1377,10 +1412,39 @@
     return false;
   };
   let holdY = 0;  // scrollY as the boxes around it were last held
+  const contain = (el, cs) => { if (!contained.has(el) && cs.overscrollBehaviorX === "auto") { setProp(el, "overscroll-behavior-x", "contain"); contained.add(el); } };
+  const holdIf = (el, cs) => {
+    if (!/auto|scroll/.test(cs.overflowX + cs.overflowY)) return;
+    if (el === document.body && bodyPans(cs)) return;
+    const across = el !== document.body && sideways(el, cs);
+    if (across) contain(el, cs);
+    if (!/^(auto|manipulation)$/.test(cs.touchAction) || inSideways(el)) return;
+    setProp(el, "touch-action", HOLD);  // (over a sheet that puts every part of a notice back to auto, important and all)
+    holds.add(el);
+    if (across) rowsHeld.add(el);
+  };
+  // (A page's script that writes a box's whole style anew drops the hold with the rest: it is one to hold again, and
+  // what it had before is gone too.)
+  const lostHold = (el) => {
+    if (!taken(el).includes("touch-action")) return;
+    delete fixed.get(el)["touch-action"];
+    holds.delete(el);
+    rowsHeld.delete(el);
+  };
+  // The body at once, as the page changes it (see watch): until the next look, every touch on the page would start
+  // afresh there.
+  function holdBody() {
+    const b = document.body;
+    if (!b || !strip || wide || zoomed()) return;
+    lostHold(b);
+    if (!holds.has(b)) holdIf(b, getComputedStyle(b));
+  }
   function holdBoxes(span = [-1, 3]) {
     holdY = scrollY;
     for (const el of holds) {
-      if (el.isConnected && !inSideways(el) && !(el === document.body && sideways(el, getComputedStyle(el)))) continue;
+      lostHold(el);
+      if (!holds.has(el)) continue;
+      if (el.isConnected && !inSideways(el) && !(el === document.body && bodyPans(getComputedStyle(el)))) continue;
       unsetProps(el, ["touch-action"]);
       holds.delete(el);
       rowsHeld.delete(el);
@@ -1392,17 +1456,6 @@
     }
     if (!document.body || wide || zoomed()) return;
     holdFrames(true);
-    const contain = (el, cs) => { if (!contained.has(el) && cs.overscrollBehaviorX === "auto") { setProp(el, "overscroll-behavior-x", "contain"); contained.add(el); } };
-    const holdIf = (el, cs) => {
-      if (!/auto|scroll/.test(cs.overflowX + cs.overflowY)) return;
-      const across = sideways(el, cs);
-      if (across && el === document.body) return;
-      if (across) contain(el, cs);
-      if (!/^(auto|manipulation)$/.test(cs.touchAction) || inSideways(el)) return;
-      setProp(el, "touch-action", HOLD);  // (over a sheet that puts every part of a notice back to auto, important and all)
-      holds.add(el);
-      if (across) rowsHeld.add(el);
-    };
     // (One held, counted again: it may have come to scroll sideways since, or no longer do.)
     const recount = (el) => {
       const cs = getComputedStyle(el);
@@ -3819,8 +3872,9 @@
       insets.set(block, nodes);
       if ("box-shadow" in room.props) { shades.set(block, { gap: room.gap ?? px, h: block.getBoundingClientRect().height }); shadeSizes.observe(block); }
     };
-    // (Below what shows, nothing that shows moves: the page is not scrolled under a moving finger or a glide, which
-    // Safari would stop.)
+    // (Below what shows, nothing that shows moves: the page is not scrolled under a moving finger, which would lose
+    // the finger its hold (WebKit clears it with any scroll a script asks for that lands), or a glide, which would
+    // lose ground.)
     let anchor = lasting.size && below === null ? anchorNow() : null;
     for (const [block, nodes] of lasting) giveRoom(block, nodes, wide);
     // Pictures in a column of words end where its words do. Its paragraphs given room, a picture between them ran on
@@ -4871,6 +4925,7 @@
       if (records.some((rec) => [...rec.addedNodes, ...rec.removedNodes].some((n) => n.nodeName === "META"))) consider();
       if (!strip) return;
       edgeTaken();
+      if (records.some((rec) => rec.target === document.body && (rec.attributeName === "style" || rec.attributeName === "class"))) holdBody();
       const rewritten = records.filter((rec) => rec.attributeName === "style" && keepers.has(rec.target) && taken(rec.target).length).map((rec) => rec.target);
       if (rewritten.length) {  // (see rehold)
         const now = performance.now();
@@ -4942,17 +4997,35 @@
         // window has changed size, by the middle of the part it showed as a share of the page's width (it had been held
         // past the strip beside another window, its middle in the middle), and where a script scrolling something in
         // the page's middle to the middle would.
-        const step = Math.abs(scrollX - seenX), jumped = step >= strip.gap - 1;
+        const step = Math.abs(scrollX - seenX), jumped = step >= strip.gap - 1, frames = Math.max(stood, 8) / 16.7, across = step / frames, rise = Math.abs(scrollY - seenY) / frames;  // (points a 60th of a second, for screens drawn faster)
+        const far = Math.abs(scrollX - pinX());
         seenX = scrollX;
-        const off = !touching && !revealing() && Math.abs(scrollX - pinX()) > 0.5 && !passing();
-        if (jumped && off) pin();
+        seenY = scrollY;
+        if (across > pt(8)) swept = performance.now();
+        // Put back, it reads as where it was for a frame or so: what Safari sent before it heard. That is no finger (taken
+        // for one, it left the page a strip's width off through the next slide's whole glide: 0.8 and 1.7 seconds, his
+        // recording, 11-04 02:25). Still back where it was after that, a finger the page never heard of is on it, and
+        // each put-back only shakes the page from side to side: it is left to the finger for a while, longer each time
+        // running, as there is no telling when it lifts. (A touch on a page gliding, see pin.)
+        const echo = backed.frames < 2;
+        if (stood >= 150) shoved = shovedUntil = 0;
+        if (!echo && backed.frames <= 12 && far >= Math.max(backed.by / 2, pt(8))) { backed.frames = Infinity; shovedUntil = performance.now() + 250 * 2 ** Math.min(shoved++, 3); }
+        const off = !touching && !revealing() && !echo && performance.now() >= shovedUntil && far > 0.5 && !passing();
+        if (jumped && off) pin(false, true);
         else if (off && step >= pt(8) && stood >= 100) {
           const was = slid;
-          requestAnimationFrame(() => requestAnimationFrame(() => { if (slid === was && !touching && !revealing() && !passing()) pin(); }));
+          requestAnimationFrame(() => requestAnimationFrame(() => { if (slid === was && !touching && !revealing() && !passing()) pin(false, true); }));
         }
-        // (Slid by a finger the page never saw, one that came down on a frame from elsewhere, or still gliding: put
-        // back once it is still, not against the finger, which shook the page from side to side, nor the glide. Slid
-        // to a field taking the keyboard: once Safari's slide is over, gliding back, see revealing.)
+        // Gliding on sideways as well, a page slid the way it has room to go would not stop until the glide does, in a
+        // second or two, and by then it may have the whole strip's width blank past its end (see pin, The Verge again).
+        // Put back as it glides, it keeps gliding up and down, and on sideways from there: so, a few points off at most,
+        // as often as it takes. Not while it goes sideways faster, as under a finger, nor so often while it goes up or
+        // down fast: WebKit puts it where the page last knew it to be, up or down too, and each time it loses some of
+        // the glide (17 points, gliding 11 a frame, in that recording). A good way off, as a finger pushes it fast that
+        // far and on to the page's end, it waits a moment for that finger to lift (a tenth of a second or so, in his
+        // recordings). A page still after its slide is put back once still, by the timer below. (Slid to a field taking
+        // the keyboard: once Safari's slide is over, gliding back, see revealing.)
+        else if (off && !wide && !zoomed() && across <= pt(8) && far >= pt(rise <= pt(6) ? 3 : 24) && (far < pt(24) || performance.now() - swept >= 80)) pin(false, true);
         clearTimeout(pinTimer);
         const glide = revealing();
         pinTimer = setTimeout(() => pin(glide), glide ? 300 : 150);
@@ -5037,15 +5110,16 @@
     // touches. Nor does touch-action hold everywhere: in a box WebKit starts a touch's touch-action afresh in (see
     // holdBoxes), given the page's own, a quick sideways drag still slid the page by the strip's width (his GitHub
     // page's table, 11-02, measured on the phone with test/debug-touch.py: the table, the box round the README and the
-    // page all pan-y pinch-zoom, and the page 72 points sideways 93 ms into a drag that went 21 points across in 11).
-    // There a swipe that starts out plainly sideways, twice as far across as up or down, is held too. Nothing else is
-    // held back: once a touch is, Safari does nothing more with it, so a pinch whose first finger moved before the
+    // page all pan-y pinch-zoom, and the page 72 points sideways 93 ms into a drag that went 21 points across in 11),
+    // and it may not for a finger that stops the page gliding (see pin), where the page hears of one at all: WebKit lets
+    // the hold go as a glide ends. There a swipe that starts out plainly sideways, twice as far across as up or down, is
+    // held too. Nothing else is held back: once a touch is, Safari does nothing more with it, so a pinch whose first finger moved before the
     // second came down zoomed nothing, and a swipe from the page's edge went neither back nor forward. There too, left
     // alone: whatever the browser scrolls sideways itself under the finger and still can (a row held is scrolled here
     // instead, below), fields, players, a press held before moving (selecting text), a swipe while text is selected
     // (its handles), two fingers, a page zoomed in or wider than the screen, and a swipe from either edge of the page.
     let swipe = null;
-    const EDGE = 32;
+    const EDGE = 32, GLIDE = 500;  // (GLIDE: since the page's last scroll, milliseconds, that it may still be gliding, too slowly to tell)
     const nearEdge = (x) => { const { lo, hi } = clearBand(); return x < lo + pt(EDGE) || x > hi - pt(EDGE); };
     const sideways = (path, dx) => path.some((n) => {
       if (!(n instanceof Element) || n === document.documentElement || n === document.body) return false;
@@ -5175,7 +5249,7 @@
       const rows = path.some((n) => n instanceof Element && n.matches(KEEPS)) ? [] : heldRowsIn(path).filter((r) => !selectedIn(r));
       const { lo, hi } = clearBand(), edge = nearEdge(x) ? (x < (lo + hi) / 2 ? -1 : 1) : 0;
       if (!rows.length && (edge || getSelection()?.isCollapsed === false)) return;
-      const across = rows.length ? 1 : carouselOf(e.target) ? 1 : inScroller(path) ? 2 : 0;
+      const across = rows.length ? 1 : carouselOf(e.target) ? 1 : inScroller(path) || performance.now() - slid < GLIDE ? 2 : 0;
       if (across) swipe = { x, y: e.touches[0].clientY, at: e.timeStamp, way: "", path, across, rows, edge };
     }, { passive: true, capture: true });
     addEventListener("touchmove", (e) => {
@@ -5216,7 +5290,7 @@
       addEventListener(type, (e) => {
         touching = e.touches.length > 0;
         if (!touching && slidAt >= touchedAt) slidAt = performance.now();  // (lifted from sliding: its glide)
-        if (strip && !touching) { liftBar(); pin(); refixAllSoon(400); }
+        if (strip && !touching) { liftBar(); pin(false, true); refixAllSoon(400); }
       }, { passive: true, capture: true });
     }
     // Taps open menus and drawers by switching a class, which adds no nodes.

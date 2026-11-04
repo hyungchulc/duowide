@@ -43,9 +43,9 @@ inclusive por baixo da faixa, e não deixa que ela cubra nada em que você preci
 - Players de vídeo cujos botões não podem ser movidos (players incorporados de outros sites, vídeos com os controles do
   próprio Safari) se estendem por baixo da faixa como as imagens, até você tocar neles ou dar play. A partir daí, eles
   terminam antes da faixa, para que os botões de tela cheia e de volume continuem ao alcance do dedo.
-- A página não desliza para os lados. O zoom com pinça e os gestos de deslizar a partir da borda para voltar e avançar
-  continuam funcionando. O próprio DuoWide desenha a barra de rolagem da página, então a barra de rolagem horizontal do
-  iOS não aparece na parte de baixo.
+- A página não desliza para os lados, exceto em um caso descrito em Problemas conhecidos. O zoom com pinça e os gestos
+  de deslizar a partir da borda para voltar e avançar continuam funcionando. O próprio DuoWide desenha a barra de
+  rolagem da página, então a barra de rolagem horizontal do iOS não aparece na parte de baixo.
 - No Split View com o iPhone Duo aberto (o Safari ao lado de outro app), as cores e os fundos da página também se
   estendem por baixo da faixa do Safari na lateral da janela, enquanto textos, imagens e botões não ficam embaixo dela.
   Para deixar o Split View do jeito que o Safari monta, defina `split` como `false`.
@@ -140,6 +140,9 @@ arquivo, então defina esses valores de novo depois de atualizar.
   ou saísse deslizando.
 - Tocar duas vezes amplia as páginas alargadas. O Safari permite isso quando a largura da página é definida como um
   número, e a configuração que desativa isso não pode ser combinada com a que impede a página de deslizar para os lados.
+- Se você tocar numa página que ainda está deslizando depois de um gesto rápido, esse toque pode movê-la para os
+  lados, no máximo a largura da faixa. O Safari não avisa a página sobre esse toque, então não dá para impedir, mas a
+  página volta sozinha logo em seguida.
 - Alguns sites ainda não funcionam bem. Por favor, me avise quais são.
 
 ## Pedir suporte a um site ou relatar um problema

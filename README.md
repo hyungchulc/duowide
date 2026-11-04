@@ -41,8 +41,9 @@ whole screen, under the strip, and keeps everything you tap clear of it.
 - Video players whose buttons can't be moved (players embedded from other sites, videos with Safari's own controls)
   run under the strip like pictures until you tap or play them. Then they end before the strip, so full screen and
   volume stay tappable.
-- The page doesn't slide sideways. Pinch zoom and the edge swipes for back and forward still work. DuoWide draws the
-  page's scroll bar itself, so iOS's sideways scroll bar doesn't show along the bottom.
+- The page doesn't slide sideways, apart from one case under Known issues. Pinch zoom and the edge swipes for back and
+  forward still work. DuoWide draws the page's scroll bar itself, so iOS's sideways scroll bar doesn't show along the
+  bottom.
 - In split view on the unfolded screen (Safari beside another app), the page's colors and backgrounds run on under
   Safari's strip on the window's side too, while text, pictures and buttons stay clear of it. To leave split view as
   Safari lays it out, set `split` to `false`.
@@ -134,6 +135,8 @@ updating.
   width. Widened, Safari would leave its bars behind each time it slides the menu in or out.
 - Double-tap zooms in on widened pages. Safari allows it when a page's width is set as a number, and the setting that
   turns it off can't be combined with the one that keeps the page from sliding sideways.
+- If you touch a page while it's still gliding from a flick, that touch can slide it sideways, by the strip's width at
+  most. Safari doesn't tell the page about such a touch, so it can't be held, but the page comes right back by itself.
 - Some sites don't work well yet. Please report them.
 
 ## Request a site or report a problem

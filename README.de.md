@@ -46,9 +46,9 @@ möchtest.
 - Videoplayer, deren Buttons sich nicht verschieben lassen (von anderen Websites eingebettete Player, Videos mit den
   eigenen Steuerelementen von Safari), laufen wie Bilder unter dem Streifen weiter, bis du sie antippst oder abspielst.
   Dann enden sie vor dem Streifen, damit sich Vollbild und Lautstärke weiterhin antippen lassen.
-- Die Seite verrutscht nicht seitlich. Zoomen mit zwei Fingern und die Wischgesten vom Rand für Zurück und Vorwärts
-  funktionieren weiterhin. DuoWide zeichnet den Scrollbalken der Seite selbst, damit unten nicht der horizontale
-  Scrollbalken von iOS erscheint.
+- Die Seite verrutscht nicht seitlich, bis auf einen Fall unter Bekannte Probleme. Zoomen mit zwei Fingern und die
+  Wischgesten vom Rand für Zurück und Vorwärts funktionieren weiterhin. DuoWide zeichnet den Scrollbalken der Seite
+  selbst, damit unten nicht der horizontale Scrollbalken von iOS erscheint.
 - In Split View auf dem aufgeklappten Display (Safari neben einer anderen App) laufen die Farben und Hintergründe der
   Seite auch unter dem Streifen von Safari am Fensterrand weiter, während Text, Bilder und Buttons außerhalb des
   Streifens bleiben. Soll Split View so bleiben, wie Safari es darstellt, setze `split` auf `false`.
@@ -146,6 +146,9 @@ die Datei, also trage diese Werte nach dem Aktualisieren erneut ein.
 - Auf verbreiterten Seiten zoomt Doppeltippen hinein. Safari erlaubt das, wenn die Breite einer Seite als Zahl
   festgelegt ist, und die Einstellung, die es abschaltet, lässt sich nicht mit der kombinieren, die das seitliche
   Verrutschen der Seite verhindert.
+- Wenn du eine Seite berührst, die nach einem schnellen Wischen noch gleitet, kann sie dadurch seitlich verrutschen,
+  höchstens um die Breite des Streifens. Safari meldet der Seite diese Berührung nicht, daher lässt sich das nicht
+  verhindern, aber die Seite kehrt gleich von selbst zurück.
 - Manche Websites funktionieren noch nicht gut. Bitte melde sie.
 
 ## Website-Wunsch oder Problem melden

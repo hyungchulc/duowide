@@ -46,9 +46,10 @@ las páginas por toda la pantalla, también bajo la franja, y se asegura de que 
   los controles propios de Safari) se extienden por debajo de la franja como las imágenes hasta que los tocas o los
   reproduces. Entonces terminan antes de la franja, para que los botones de pantalla completa y de volumen se puedan
   seguir tocando.
-- La página no se desliza hacia los lados. Puedes seguir pellizcando para hacer zoom y deslizando desde el borde para
-  ir atrás o adelante. DuoWide dibuja por su cuenta la barra de desplazamiento de la página, así que la barra de
-  desplazamiento horizontal de iOS no aparece en la parte de abajo.
+- La página no se desliza hacia los lados, salvo en un caso que se explica en Problemas conocidos. Puedes seguir
+  pellizcando para hacer zoom y deslizando desde el borde para ir atrás o adelante. DuoWide dibuja por su cuenta la
+  barra de desplazamiento de la página, así que la barra de desplazamiento horizontal de iOS no aparece en la parte de
+  abajo.
 - En Split View en la pantalla desplegada (Safari junto a otra app), los colores y fondos de la página también
   continúan bajo la franja que Safari pone en el lateral de la ventana, mientras que el texto, las imágenes y los
   botones quedan fuera de ella. Para dejar Split View tal como lo muestra Safari, pon `split` en `false`.
@@ -144,6 +145,9 @@ reemplaza el archivo, así que vuelve a configurar estas opciones después de ca
 - En las páginas ensanchadas, tocar dos veces amplía la página. Safari lo permite cuando el ancho de una página se fija
   con un número, y la opción que lo desactiva no se puede combinar con la que impide que la página se deslice hacia los
   lados.
+- Si tocas una página que aún se está deslizando tras un gesto rápido, ese toque puede moverla hacia los lados, como
+  mucho el ancho de la franja. Safari no avisa a la página de ese toque, así que no se puede impedir, pero la página
+  vuelve sola enseguida.
 - Algunos sitios todavía no funcionan bien. Por favor, avísame si encuentras alguno.
 
 ## Pedir un sitio o avisar de un problema
