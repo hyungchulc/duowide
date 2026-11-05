@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DuoWide
 // @namespace    https://github.com/hyungchulc/duowide
-// @version      2.0.10
+// @version      2.0.11
 // @description  Lets web pages use the whole iPhone Duo outer screen in Safari, under the side strip, and keeps what you tap clear of the strip.
 // @author       hyungchulc
 // @homepageURL  https://github.com/hyungchulc/duowide
@@ -2139,6 +2139,12 @@
       // held on the screen is seen whole, its buttons shown once tapped are inside), and let its own color carry on
       // under the strip.
       const left = Math.max(r.left, l), right = Math.min(r.right, h);
+      // What is on it is laid out in the part shown from here on, so what the page sized by the screen's width in it (in
+      // vw, which counts the whole screen while the page is widened, see wholeScreen) is sized by that part, as Safari
+      // counts vw: Apple's sheets, held at least min(816px, 100vw) wide in the dimming layer they are in, ran on past
+      // that layer's end at the strip, cut off there with the right of their fields and their close button (his
+      // screenshot of Apple's pickup sheet, 11-05).
+      setProp(box, "--duowide-vw", `${(hi - lo) / 100}px`);
       // A fade keeps running under the strip, and what is on it keeps clear of the strip by the bar's own padding,
       // if that brings all of it in.
       if (!paintOf(box) && fades(box)) {
@@ -2176,10 +2182,11 @@
       // what it places by it comes beside the strip with it.
       const layer = holderOf.get(box), q = layer && layer.isConnected && layer.getBoundingClientRect();
       if (q && q.right <= hi + 0.5 && q.left >= lo - 0.5) {
-        setProp(layer, "--duowide-vw", `${(hi - lo) / 100}px`);
+        const ended = "--duowide-vw" in (fixed.get(layer) || {});  // (a layer ended at the strip, looked at first, has it already)
+        if (!ended) setProp(layer, "--duowide-vw", `${(hi - lo) / 100}px`);
         const a = box.getBoundingClientRect();
         if (a.right <= h + 0.5 && a.left >= l - 0.5) return;
-        unsetProps(layer, ["--duowide-vw"]);
+        if (!ended) unsetProps(layer, ["--duowide-vw"]);
       }
       // A button or badge in the strip: move it out, as far from the strip as it was from the screen's edge.
       nudge(box, r.right > h ? h - r.right - margin(r) : l - r.left + margin(r));
